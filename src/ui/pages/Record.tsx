@@ -28,6 +28,7 @@ export default function Record() {
     startedAt: number
     lastFinalEnd: number
     timer: ReturnType<typeof setInterval>
+    pendingWrites: Promise<void>[]
   } | null>(null)
 
   useEffect(() => () => { void cleanup() }, [])
@@ -37,9 +38,10 @@ export default function Record() {
     if (!s) return
     session.current = null
     clearInterval(s.timer)
-    s.engine?.stop()
+    // 스펙 §6 종료 순서: recorder.stop() → engine.stop() → wakeLock.disable()
     await s.recorder.stop().catch(() => {})
-    await s.wakeLock.disable()
+    s.engine?.stop()
+    await s.wakeLock.disable().catch(() => {})
     s.stream.getTracks().forEach(t => t.stop())
   }
 
@@ -52,46 +54,66 @@ export default function Record() {
       setError('마이크를 사용할 수 없습니다. 브라우저 권한을 확인해주세요.')
       return
     }
-    const meeting = await createMeeting()
-    const mimeType = pickMimeType()
-    const recorder = new ChunkedRecorder(stream, {
-      onChunk: (blob, seq) => { void appendAudioChunk(meeting.id, seq, blob, mimeType ?? blob.type) },
-      onStallRestart: () => setError('녹음이 잠시 끊겨 자동으로 재시작했습니다.'),
-      onError: () => setError('녹음 장치 오류가 발생했습니다. 지금까지의 녹음은 저장되어 있습니다.'),
-    }, { mimeType })
 
-    const startedAt = Date.now()
-    const elapsedSec = () => (Date.now() - startedAt) / 1000
-
-    let engine: WebSpeechEngine | null = null
-    if (sttCtor) {
-      engine = new WebSpeechEngine(sttCtor, meeting.language, {
-        onInterim: setInterim,
-        onFinal: text => {
-          const s = session.current
-          if (!s) return
-          const end = elapsedSec()
-          void appendSegment({
-            meetingId: s.meetingId, startSec: s.lastFinalEnd, endSec: end,
-            text, source: 'webspeech', isFinal: true,
-          })
-          s.lastFinalEnd = end
-          setFinals(prev => [...prev, text])
+    // getUserMedia 성공 이후 어디서 실패하든 스트림/부분 리소스를 반드시 정리한다.
+    let timer: ReturnType<typeof setInterval> | undefined
+    let wakeLock: ReturnType<typeof createWakeLockManager> | undefined
+    try {
+      const meeting = await createMeeting()
+      const mimeType = pickMimeType()
+      const pendingWrites: Promise<void>[] = []
+      const recorder = new ChunkedRecorder(stream, {
+        onChunk: (blob, seq) => {
+          pendingWrites.push(appendAudioChunk(meeting.id, seq, blob, mimeType ?? blob.type).catch(() => {}))
         },
-        onStatus: () => {},
-      })
-    }
+        onStallRestart: () => setError('녹음이 잠시 끊겨 자동으로 재시작했습니다.'),
+        onError: () => setError('녹음 장치 오류가 발생했습니다. 지금까지의 녹음은 저장되어 있습니다.'),
+      }, { mimeType })
 
-    const wakeLock = createWakeLockManager()
-    const timer = setInterval(() => setElapsed(elapsedSec()), 1000)
-    session.current = {
-      meetingId: meeting.id, recorder, engine, wakeLock, stream,
-      startedAt, lastFinalEnd: 0, timer,
+      const startedAt = Date.now()
+      const elapsedSec = () => (Date.now() - startedAt) / 1000
+
+      let engine: WebSpeechEngine | null = null
+      if (sttCtor) {
+        engine = new WebSpeechEngine(sttCtor, meeting.language, {
+          onInterim: setInterim,
+          onFinal: text => {
+            const s = session.current
+            if (!s) return
+            const end = elapsedSec()
+            s.pendingWrites.push(appendSegment({
+              meetingId: s.meetingId, startSec: s.lastFinalEnd, endSec: end,
+              text, source: 'webspeech', isFinal: true,
+            }).catch(() => {}))
+            s.lastFinalEnd = end
+            setFinals(prev => [...prev, text])
+          },
+          onStatus: () => {},
+        })
+      }
+
+      wakeLock = createWakeLockManager()
+      timer = setInterval(() => setElapsed(elapsedSec()), 1000)
+      session.current = {
+        meetingId: meeting.id, recorder, engine, wakeLock, stream,
+        startedAt, lastFinalEnd: 0, timer, pendingWrites,
+      }
+      recorder.start()
+      engine?.start()
+      await wakeLock.enable()
+      setPhase('recording')
+    } catch {
+      if (session.current) {
+        // 세션이 이미 구성된 뒤 실패 → 레코더/엔진/워크락/스트림 전부 정리
+        await cleanup()
+      } else {
+        // 세션 구성 이전 실패 → 부분 생성된 리소스 수동 정리
+        if (timer) clearInterval(timer)
+        if (wakeLock) await wakeLock.disable().catch(() => {})
+        stream.getTracks().forEach(t => t.stop())
+      }
+      setError('녹음을 시작하지 못했습니다. 다시 시도해주세요.')
     }
-    recorder.start()
-    engine?.start()
-    await wakeLock.enable()
-    setPhase('recording')
   }
 
   async function stop() {
@@ -100,8 +122,15 @@ export default function Record() {
     setPhase('stopping')
     const durationSec = Math.round((Date.now() - s.startedAt) / 1000)
     await cleanup()
-    await finishMeeting(s.meetingId, durationSec)
-    navigate(`/meeting/${s.meetingId}`)
+    // flush 청크/세그먼트 DB 쓰기가 끝난 뒤 회의를 마감한다.
+    await Promise.allSettled(s.pendingWrites)
+    try {
+      await finishMeeting(s.meetingId, durationSec)
+      navigate(`/meeting/${s.meetingId}`)
+    } catch {
+      setError('회의를 마치지 못했습니다. 홈의 복구 배너에서 이어서 저장할 수 있습니다.')
+      setPhase('idle')
+    }
   }
 
   return (
