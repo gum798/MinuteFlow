@@ -36,6 +36,28 @@ test('disable 후에는 재획득하지 않는다', async () => {
   expect(request).toHaveBeenCalledTimes(1)
 })
 
+test('재획득 시 이전 sentinel을 해제한다', async () => {
+  const sentinels: Array<{ release: ReturnType<typeof vi.fn> }> = []
+  const request = vi.fn(async () => {
+    const s = { release: vi.fn(async () => {}) }
+    sentinels.push(s)
+    return s
+  })
+  const listeners: Record<string, () => void> = {}
+  const doc = {
+    visibilityState: 'visible',
+    addEventListener: vi.fn((t: string, fn: () => void) => { listeners[t] = fn }),
+    removeEventListener: vi.fn((t: string) => { delete listeners[t] }),
+  } as unknown as Document
+  const nav = { wakeLock: { request } } as unknown as Navigator
+
+  await createWakeLockManager(nav, doc).enable()
+  await listeners['visibilitychange']()
+
+  expect(sentinels).toHaveLength(2)
+  expect(sentinels[0].release).toHaveBeenCalled()
+})
+
 test('API 미지원이면 조용히 no-op', async () => {
   const doc = { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Document
   const mgr = createWakeLockManager({} as Navigator, doc)

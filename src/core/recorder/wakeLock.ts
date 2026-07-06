@@ -10,6 +10,8 @@ export function createWakeLockManager(
   async function acquire(): Promise<void> {
     const wakeLock = (nav as { wakeLock?: { request(type: 'screen'): Promise<Sentinel> } }).wakeLock
     if (!wakeLock) return
+    await sentinel?.release().catch(() => {})
+    sentinel = null
     try { sentinel = await wakeLock.request('screen') } catch { /* 저전력 모드 등에서 거부될 수 있음 */ }
   }
 
