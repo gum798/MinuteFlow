@@ -31,18 +31,25 @@ test('exportFilename은 날짜 프리픽스와 안전한 파일명', () => {
   expect(exportFilename({ ...meeting, title: 'a/b:c' }, 'txt')).toBe('2026-07-06-a_b_c.txt')
 })
 
-test('downloadBlob은 a 태그 클릭으로 저장을 트리거한다', () => {
+test('downloadBlob은 a 태그 클릭으로 저장을 트리거하고 revoke를 지연시킨다', () => {
+  vi.useFakeTimers()
   const click = vi.fn()
   const a = document.createElement('a')
   a.click = click
   vi.spyOn(document, 'createElement').mockReturnValueOnce(a)
+  const revokeObjectURL = vi.fn()
   vi.stubGlobal('URL', {
-    createObjectURL: vi.fn(() => 'blob:fake'), revokeObjectURL: vi.fn(),
+    createObjectURL: vi.fn(() => 'blob:fake'), revokeObjectURL,
   })
   downloadBlob('t.md', new Blob(['x']))
   expect(a.download).toBe('t.md')
   expect(a.href).toContain('blob:fake')
   expect(click).toHaveBeenCalled()
+  // revoke는 동기적으로 호출되지 않는다 (대용량 다운로드 절단 방지)
+  expect(revokeObjectURL).not.toHaveBeenCalled()
+  vi.advanceTimersByTime(1_000)
+  expect(revokeObjectURL).toHaveBeenCalledWith('blob:fake')
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
