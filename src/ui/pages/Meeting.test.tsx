@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { db } from '../../core/store/db'
-import { createMeeting, finishMeeting, appendSegment, updateMeetingTitle } from '../../core/store/meetings'
+import { createMeeting, finishMeeting, appendSegment } from '../../core/store/meetings'
 import MeetingPage from './Meeting'
 
 beforeEach(async () => {
