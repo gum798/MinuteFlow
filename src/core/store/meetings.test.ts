@@ -4,7 +4,7 @@ import {
   updateMeetingTitle, listMeetings, getMeeting, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting,
   createUploadMeeting, replaceSegments, applySpeakers, updateSpeakerNames,
-  softDeleteMeeting, restoreMeeting, purgeDeleted,
+  softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
 } from './meetings'
 
 beforeEach(async () => {
@@ -163,4 +163,39 @@ test('purgeDeleted는 soft-deleted 회의만 하위 데이터까지 완전 삭�
   // 삭제되지 않은 회의는 그대로 보존
   expect(await getMeeting(keep.id)).toBeDefined()
   expect(await db.audioChunks.where('meetingId').equals(keep.id).count()).toBe(1)
+})
+
+test('연속 삭제: purgeMeeting(A)는 A만 지우고 B는 남겨 실행취소를 보존한다', async () => {
+  const a = await createMeeting()
+  await finishMeeting(a.id, 60)
+  await appendAudioChunk(a.id, 0, new Blob(['a']), 'audio/webm')
+  const b = await createMeeting()
+  await finishMeeting(b.id, 60)
+  await appendAudioChunk(b.id, 0, new Blob(['b']), 'audio/webm')
+
+  // A 삭제 후 5초 내 B 삭제 → 이 시점에 A 토스트가 만료 확정되며 purgeMeeting(A) 실행
+  await softDeleteMeeting(a.id)
+  await softDeleteMeeting(b.id)
+  await purgeMeeting(a.id)
+
+  // A만 하드 삭제, B는 soft-deleted로 잔존
+  expect(await getMeeting(a.id)).toBeUndefined()
+  expect(await db.audioChunks.where('meetingId').equals(a.id).count()).toBe(0)
+  expect(await getMeeting(b.id)).toBeDefined()
+  expect(await db.audioChunks.where('meetingId').equals(b.id).count()).toBe(1)
+
+  // B의 실행취소가 유효 — 복구하면 목록에 다시 나타난다
+  await restoreMeeting(b.id)
+  expect((await listMeetings()).map(x => x.id)).toContain(b.id)
+})
+
+test('restore된 회의에 purgeMeeting을 호출하면 no-op (경합 방어)', async () => {
+  const m = await createMeeting()
+  await finishMeeting(m.id, 60)
+  await softDeleteMeeting(m.id)
+  await restoreMeeting(m.id)
+  // restore 후 남아있던 만료 타이머가 뒤늦게 발화해도 삭제되면 안 된다
+  await purgeMeeting(m.id)
+  expect(await getMeeting(m.id)).toBeDefined()
+  expect((await listMeetings()).map(x => x.id)).toContain(m.id)
 })

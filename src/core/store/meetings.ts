@@ -132,6 +132,16 @@ export async function restoreMeeting(id: string): Promise<void> {
 }
 
 /**
+ * 특정 회의 하나만 하드 삭제한다. soft-deleted 상태일 때만 지운다.
+ * (없거나 이미 restore된 경우 no-op — 실행취소 후 남아있는 만료 타이머의 경합 방어)
+ */
+export async function purgeMeeting(id: string): Promise<void> {
+  const m = await db.meetings.get(id)
+  if (!m || m.deletedAt === undefined) return
+  await deleteMeeting(id)
+}
+
+/**
  * soft-deleted 회의를 기존 캐스케이드로 완전 삭제한다.
  * `olderThanMs`를 주면 그 시간보다 오래된 것만 지운다(실행취소 대기 중인 최신 삭제는 보존).
  */

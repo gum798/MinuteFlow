@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import type { Meeting } from '../../core/types'
 import {
   listMeetings, findInterruptedMeetings, finalizeInterrupted,
-  softDeleteMeeting, restoreMeeting, purgeDeleted,
+  softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
 } from '../../core/store/meetings'
 import { ensurePersistentStorage, getStorageUsage } from '../../core/store/storage'
 import { formatTimestamp } from '../../core/format'
@@ -44,7 +44,7 @@ export default function Home() {
     showUndoToast({
       message: '회의록을 삭제했어요.',
       onUndo: () => { void (async () => { await restoreMeeting(id); await refresh() })() },
-      onExpire: () => { void purgeDeleted() },
+      onExpire: () => { void purgeMeeting(id) },
     })
   }
 

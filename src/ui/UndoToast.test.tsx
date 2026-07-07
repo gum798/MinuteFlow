@@ -48,19 +48,20 @@ test('시간이 지나 만료되면 onExpire가 호출되고 토스트가 사라
   }
 })
 
-test('토스트가 만료되면 purgeDeleted(하드 삭제)가 실행된다', () => {
+test('토스트가 만료되면 onExpire의 purgeMeeting(하드 삭제)이 실행된다', () => {
   vi.useFakeTimers()
   try {
-    const purgeSpy = vi.spyOn(store, 'purgeDeleted').mockResolvedValue(undefined)
+    const purgeSpy = vi.spyOn(store, 'purgeMeeting').mockResolvedValue(undefined)
     render(
       <UndoToastProvider>
-        <Trigger onExpire={() => { void store.purgeDeleted() }} />
+        <Trigger onExpire={() => { void store.purgeMeeting('m1') }} />
       </UndoToastProvider>,
     )
     fireEvent.click(screen.getByText('show'))
     expect(purgeSpy).not.toHaveBeenCalled()
     act(() => { vi.advanceTimersByTime(UNDO_MS) })
     expect(purgeSpy).toHaveBeenCalledTimes(1)
+    expect(purgeSpy).toHaveBeenCalledWith('m1')
   } finally {
     vi.useRealTimers()
     vi.restoreAllMocks()
