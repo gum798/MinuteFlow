@@ -60,6 +60,12 @@ export default function MeetingPage() {
     downloadBlob(exportFilename(meeting, format), new Blob([content], { type }))
   }
 
+  async function exportDocx() {
+    if (!meeting) return
+    const { toDocxBlob } = await import('../../core/export/docx')
+    downloadBlob(exportFilename(meeting, 'docx'), await toDocxBlob(meeting, segments, summaries))
+  }
+
   async function runSummarize() {
     if (!meeting) return
     setSummarizing(true)
@@ -211,6 +217,7 @@ export default function MeetingPage() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 18 }}>
         <button className="btn btn-outline btn-sm" onClick={() => exportAs('md')}>Markdown 내보내기</button>
         <button className="btn btn-outline btn-sm" onClick={() => exportAs('txt')}>TXT 내보내기</button>
+        <button className="btn btn-outline btn-sm" onClick={() => void exportDocx()}>DOCX 내보내기</button>
         <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
         {audioAvailable && (
           <>
