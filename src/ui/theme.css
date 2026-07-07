@@ -147,6 +147,16 @@ a { color: var(--accent); text-decoration: none; }
 .alert-warn { background: var(--warn-bg); color: var(--warn-fg); }
 .alert-err { background: var(--err-bg); color: #B4231B; }
 
+/* 고급 설정 접기 */
+details.advanced > summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-muted);
+  list-style: none; display: flex; align-items: center; gap: 6px;
+}
+details.advanced > summary::before { content: '▸'; transition: transform .15s; }
+details.advanced[open] > summary::before { transform: rotate(90deg); }
+details.advanced > summary::-webkit-details-marker { display: none; }
+details.advanced[open] > summary { margin-bottom: 12px; }
+
 /* 목록 행 */
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .muted { color: var(--text-muted); font-size: 12px; }

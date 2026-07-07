@@ -76,3 +76,9 @@ test('파일 선택 전에는 전사 시작이 비활성', () => {
   renderPage()
   expect(screen.getByRole('button', { name: /전사 시작/ })).toBeDisabled()
 })
+
+test('Groq 키가 저장돼 있으면 마운트 시 Groq가 이미 선택돼 있다', () => {
+  saveSettings({ groqApiKey: 'gsk_1' })
+  renderPage()
+  expect(screen.getByLabelText(/Groq/)).toBeChecked()
+})

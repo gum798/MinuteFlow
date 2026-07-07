@@ -12,7 +12,7 @@ type Engine = 'whisper' | 'groq'
 export default function Upload() {
   const settings = loadSettings()
   const [file, setFile] = useState<File | null>(null)
-  const [engine, setEngine] = useState<Engine>('whisper')
+  const [engine, setEngine] = useState<Engine>(() => settings.groqApiKey ? 'groq' : 'whisper')
   const [busy, setBusy] = useState(false)
   const [stage, setStage] = useState('')
   const [progress, setProgress] = useState<number | null>(null)
@@ -86,7 +86,7 @@ export default function Upload() {
   return (
     <div>
       <h1>파일 업로드</h1>
-      <p className="sub">녹음 파일을 올리면 브라우저 안에서(또는 내 Groq 키로) 전사합니다.</p>
+      <p className="sub">녹음 파일을 올리면 자동으로 회의록을 만들어드려요.</p>
       {error && <div className="alert alert-err" role="alert" style={{ marginTop: 14 }}>{error}</div>}
 
       <div
@@ -113,9 +113,8 @@ export default function Upload() {
           onChange={e => setFile(e.target.files?.[0] ?? null)} />
       </div>
 
-      <p className="hint">1시간 이상 긴 파일이나 모바일에서는 Groq 키 사용(설정)이 훨씬 빠르고 안정적입니다.</p>
-
-      <section className="card" style={{ marginTop: 16 }}>
+      <details className="card advanced" style={{ marginTop: 16 }}>
+        <summary>고급 설정</summary>
         <h2>전사 엔진</h2>
         <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
           <input type="radio" id="eng-whisper" name="engine"
@@ -128,7 +127,8 @@ export default function Upload() {
           <label htmlFor="eng-groq">Groq (내 키) <span className="hint">
             — 빠름 · 오디오가 Groq로 전송됨</span>{!hasGroqKey && <> · <Link to="/settings">설정에서 키를 등록하세요</Link></>}</label>
         </div>
-      </section>
+        <p className="hint">1시간 이상 긴 파일이나 모바일에서는 Groq 키 사용(설정)이 훨씬 빠르고 안정적입니다.</p>
+      </details>
 
       <p style={{ marginTop: 18 }}>
         <button className="btn btn-primary" disabled={!file || busy} onClick={() => void start()}>
