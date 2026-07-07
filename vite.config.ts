@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
+import { configDefaults } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
@@ -43,5 +44,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['fake-indexeddb/auto', './src/test/setup.ts'],
+    // Playwright e2e는 vitest 대상에서 제외 (기본 exclude 유지)
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 })
