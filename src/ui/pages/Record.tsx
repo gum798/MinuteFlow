@@ -161,10 +161,13 @@ export default function Record() {
       )}
       {sttCtor && <p className="hint">실시간 자막 사용 시 음성이 Google 서버로 전송됩니다.</p>}
       {phase === 'recording' && (
-        <section className="card" aria-label="실시간 자막" style={{ marginTop: 16 }}>
-          {finals.map((t, i) => <p key={i} style={{ color: 'var(--text-body)' }}>{t}</p>)}
-          {interim && <p style={{ color: 'var(--text-muted)' }}>{interim}</p>}
-        </section>
+        <>
+          <section className="card" aria-label="실시간 자막" style={{ marginTop: 16 }}>
+            {finals.map((t, i) => <p key={i} style={{ color: 'var(--text-body)' }}>{t}</p>)}
+            {interim && <p style={{ color: 'var(--text-muted)' }}>{interim}</p>}
+          </section>
+          <p className="hint" style={{ marginTop: 12 }}>모바일에서는 화면을 켠 채 이 탭을 유지해주세요.</p>
+        </>
       )}
     </div>
   )

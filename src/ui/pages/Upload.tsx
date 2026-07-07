@@ -135,6 +135,11 @@ export default function Upload() {
           {busy ? '처리 중…' : '전사 시작'}
         </button>
       </p>
+      {!busy && (
+        <p className="hint">{engine === 'groq'
+          ? '내 Groq 키로 빠르게 전사해요 (오디오가 Groq 서버로 전송됩니다)'
+          : '이 기기 안에서 처리돼요 (음성이 밖으로 나가지 않습니다)'}</p>
+      )}
 
       {busy && (
         <section className="card" style={{ marginTop: 8 }}>

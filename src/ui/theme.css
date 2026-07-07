@@ -75,6 +75,16 @@ a { color: var(--accent); text-decoration: none; }
   .nav-item { width: auto; padding: 7px 10px; }
   .content { padding: 20px 16px 40px; }
 }
+@media (max-width: 560px) {
+  .content { padding: 16px 12px 32px; }
+  h1 { font-size: 20px; }
+  .card-grid { grid-template-columns: 1fr; }
+  .row { flex-wrap: wrap; }
+  .btn { height: 42px; }             /* 터치 타깃 */
+  .dropzone { padding: 32px 16px; }
+  .sidebar { overflow-x: auto; }     /* nav 스크롤 */
+  .toast { width: calc(100% - 32px); max-width: 360px; text-align: center; }
+}
 
 /* 카드 */
 .card {
