@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle } from '../../core/store/meetings'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments } from '../../core/store/meetings'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
+import { loadSettings } from '../../core/settings'
+import { decodeTo16kMono } from '../../core/audio/decode'
+import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
+import { transcribeSamplesWithGroq } from '../../core/stt/groq'
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
   const [meeting, setMeeting] = useState<Meeting | null | undefined>(undefined)
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [title, setTitle] = useState('')
+  const [audioAvailable, setAudioAvailable] = useState(false)
+  const [retranscribing, setRetranscribing] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -19,6 +25,7 @@ export default function MeetingPage() {
       if (m) {
         setTitle(m.title)
         setSegments((await getSegments(id)).filter(s => s.isFinal))
+        setAudioAvailable((await getMeetingAudio(id)) !== null)
       }
     })()
   }, [id])
@@ -47,15 +54,70 @@ export default function MeetingPage() {
     downloadBlob(exportFilename(meeting, ext), blob)
   }
 
+  async function retranscribe() {
+    if (!meeting || !window.confirm('기존 전사를 새 결과로 교체할까요?')) return
+    const settings = loadSettings()
+    setRetranscribing('오디오 준비 중…')
+    try {
+      const blob = await getMeetingAudio(meeting.id)
+      if (!blob) return
+      const samples = await decodeTo16kMono(await blob.arrayBuffer())
+      let segs
+      let source: 'whisper' | 'groq'
+      if (settings.groqApiKey) {
+        source = 'groq'
+        setRetranscribing('Groq로 전사 중…')
+        segs = await transcribeSamplesWithGroq(samples, {
+          apiKey: settings.groqApiKey, language: settings.language,
+          onPart: (d, t) => setRetranscribing(`Groq 분할 전사 중 (${d}/${t})`),
+        })
+      } else {
+        source = 'whisper'
+        const webgpu = await detectWebGPU()
+        const eng = new WhisperLocalEngine()
+        try {
+          setRetranscribing('브라우저 Whisper로 전사 중… (모델 다운로드가 필요할 수 있어요)')
+          segs = await eng.transcribe(samples, {
+            model: webgpu ? settings.whisperModel : 'onnx-community/whisper-base',
+            device: webgpu ? 'webgpu' : 'wasm',
+            language: settings.language,
+          }, p => { if (p.kind === 'status') setRetranscribing(p.message) })
+        } finally { eng.dispose() }
+      }
+      await replaceSegments(meeting.id, segs.map(s => ({ ...s, source, isFinal: true })))
+      setSegments((await getSegments(meeting.id)).filter(s => s.isFinal))
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRetranscribing(null)
+    }
+  }
+
   return (
     <main>
       <p><Link to="/">← 홈</Link></p>
       <input value={title} onChange={e => setTitle(e.target.value)} onBlur={() => void saveTitle()} aria-label="회의 제목" />
       <p>길이: {formatTimestamp(meeting.durationSec)}</p>
+      {segments.length > 0 && (
+        <p>
+          <span className={`badge ${segments[0].source === 'webspeech' ? 'badge-gray' : 'badge-accent'}`}>
+            {segments[0].source === 'webspeech' ? '실시간 자막' : segments[0].source === 'whisper' ? 'Whisper 전사' : 'Groq 전사'}
+          </span>
+        </p>
+      )}
       <p>
         <button onClick={() => exportAs('md')}>Markdown 내보내기</button>{' '}
         <button onClick={() => exportAs('txt')}>TXT 내보내기</button>{' '}
         <button onClick={() => void downloadAudio()}>오디오 다운로드</button>
+        {audioAvailable && (
+          <>
+            {' '}
+            <button className="btn btn-outline" disabled={retranscribing !== null} onClick={() => void retranscribe()}>
+              {retranscribing ?? '고품질 재전사'}
+            </button>{' '}
+            <span className="hint">{loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
+          </>
+        )}
       </p>
       {segments.length === 0 ? (
         <p>전사된 내용이 없습니다. (실시간 자막 미지원 환경에서 녹음된 회의는 Plan 2의 파일 전사로 처리할 수 있습니다)</p>
