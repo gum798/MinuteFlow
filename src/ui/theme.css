@@ -153,6 +153,9 @@ a { color: var(--accent); text-decoration: none; }
   background: var(--chip-dark); color: #fff; border-radius: 999px; padding: 10px 18px;
   font-size: 12.5px; font-weight: 600; box-shadow: 0 8px 24px rgba(26, 32, 51, 0.25); z-index: 100;
 }
+.toast-action {
+  background: none; border: none; color: #8AB4F8; font-weight: 700; font-size: 12.5px; cursor: pointer; margin-left: 8px;
+}
 .alert { border-radius: 10px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; margin-bottom: 14px; }
 .alert-warn { background: var(--warn-bg); color: var(--warn-fg); }
 .alert-err { background: var(--err-bg); color: #B4231B; }

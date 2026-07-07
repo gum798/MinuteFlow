@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames, deleteMeeting } from '../../core/store/meetings'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeDeleted } from '../../core/store/meetings'
+import { useUndoToast } from '../UndoToast'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
@@ -15,6 +16,7 @@ import { GROQ_ENABLED } from '../../core/features'
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const showUndoToast = useUndoToast()
   const [meeting, setMeeting] = useState<Meeting | null | undefined>(undefined)
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [title, setTitle] = useState('')
@@ -143,9 +145,15 @@ export default function MeetingPage() {
 
   async function removeMeeting() {
     if (!meeting) return
-    if (!window.confirm('이 회의록을 삭제할까요? 되돌릴 수 없습니다.')) return
-    await deleteMeeting(meeting.id)
+    const id = meeting.id
+    await softDeleteMeeting(id)
     navigate('/')
+    showUndoToast({
+      message: '회의록을 삭제했어요.',
+      // 홈으로 이동한 뒤이므로 여기서 refresh 불가 → 복구 후 이벤트로 홈 목록을 다시 로드시킨다
+      onUndo: () => { void (async () => { await restoreMeeting(id); window.dispatchEvent(new Event('minuteflow:refresh')) })() },
+      onExpire: () => { void purgeDeleted() },
+    })
   }
 
   return (

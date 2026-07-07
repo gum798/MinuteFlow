@@ -1,28 +1,37 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { Meeting } from '../../core/types'
 import {
-  listMeetings, findInterruptedMeetings, finalizeInterrupted, deleteMeeting,
+  listMeetings, findInterruptedMeetings, finalizeInterrupted,
+  softDeleteMeeting, restoreMeeting, purgeDeleted,
 } from '../../core/store/meetings'
 import { ensurePersistentStorage, getStorageUsage } from '../../core/store/storage'
 import { formatTimestamp } from '../../core/format'
+import { useUndoToast, UNDO_MS } from '../UndoToast'
 
 export default function Home() {
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [interrupted, setInterrupted] = useState<Meeting[]>([])
   const [usage, setUsage] = useState<{ usage: number; quota: number } | null>(null)
   const navigate = useNavigate()
+  const showUndoToast = useUndoToast()
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setMeetings(await listMeetings())
     setInterrupted(await findInterruptedMeetings())
     setUsage(await getStorageUsage())
-  }
+  }, [])
 
   useEffect(() => {
     void ensurePersistentStorage()
+    // 탭이 만료 전에 닫혀 남은 soft-deleted 잔여를 정리(단, 실행취소 대기 중인 최신 삭제는 보존)
+    void purgeDeleted(UNDO_MS)
     void refresh()
-  }, [])
+    // 다른 화면(회의 상세)에서 실행취소로 복구되면 목록을 다시 로드
+    const onRefresh = () => { void refresh() }
+    window.addEventListener('minuteflow:refresh', onRefresh)
+    return () => window.removeEventListener('minuteflow:refresh', onRefresh)
+  }, [refresh])
 
   async function recover(id: string) {
     await finalizeInterrupted(id)
@@ -30,9 +39,13 @@ export default function Home() {
   }
 
   async function remove(id: string) {
-    if (!window.confirm('이 회의록을 삭제할까요? 되돌릴 수 없습니다.')) return
-    await deleteMeeting(id)
+    await softDeleteMeeting(id)
     await refresh()
+    showUndoToast({
+      message: '회의록을 삭제했어요.',
+      onUndo: () => { void (async () => { await restoreMeeting(id); await refresh() })() },
+      onExpire: () => { void purgeDeleted() },
+    })
   }
 
   const done = meetings.filter(m => m.status === 'done')

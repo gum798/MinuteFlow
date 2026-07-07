@@ -43,7 +43,7 @@ export async function updateMeetingTitle(id: string, title: string): Promise<voi
 }
 
 export function listMeetings(): Promise<Meeting[]> {
-  return db.meetings.orderBy('createdAt').reverse().toArray()
+  return db.meetings.orderBy('createdAt').reverse().filter(m => !m.deletedAt).toArray()
 }
 
 export function getMeeting(id: string): Promise<Meeting | undefined> {
@@ -62,7 +62,7 @@ export async function getMeetingAudio(meetingId: string): Promise<Blob | null> {
 }
 
 export function findInterruptedMeetings(): Promise<Meeting[]> {
-  return db.meetings.where('status').equals('recording').toArray()
+  return db.meetings.where('status').equals('recording').filter(m => !m.deletedAt).toArray()
 }
 
 export async function finalizeInterrupted(id: string): Promise<Meeting | undefined> {
@@ -119,4 +119,24 @@ export async function deleteMeeting(id: string): Promise<void> {
     await db.summaries.where('meetingId').equals(id).delete()
     await db.meetings.delete(id)
   })
+}
+
+/** 회의를 목록에서 즉시 숨긴다(하위 데이터·오디오는 그대로 두어 실행취소를 값싸게 만든다). */
+export async function softDeleteMeeting(id: string): Promise<void> {
+  await db.meetings.update(id, { deletedAt: Date.now() })
+}
+
+/** soft-delete를 취소하고 다시 목록에 노출한다. */
+export async function restoreMeeting(id: string): Promise<void> {
+  await db.meetings.update(id, { deletedAt: undefined })
+}
+
+/**
+ * soft-deleted 회의를 기존 캐스케이드로 완전 삭제한다.
+ * `olderThanMs`를 주면 그 시간보다 오래된 것만 지운다(실행취소 대기 중인 최신 삭제는 보존).
+ */
+export async function purgeDeleted(olderThanMs = 0): Promise<void> {
+  const cutoff = Date.now() - olderThanMs
+  const rows = await db.meetings.filter(m => m.deletedAt !== undefined && m.deletedAt <= cutoff).toArray()
+  for (const m of rows) await deleteMeeting(m.id)
 }

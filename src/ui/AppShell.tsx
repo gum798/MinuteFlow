@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { UndoToastProvider } from './UndoToast'
 
 const NAV = [
   { to: '/', label: '홈' },
@@ -9,23 +10,25 @@ const NAV = [
 
 export default function AppShell() {
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="logo"><i>M</i>MinuteFlow</div>
-        {NAV.map(n => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            end={n.to === '/'}
-            className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
-          >
-            {n.label}
-          </NavLink>
-        ))}
-      </aside>
-      <main className="content">
-        <Outlet />
-      </main>
-    </div>
+    <UndoToastProvider>
+      <div className="shell">
+        <aside className="sidebar">
+          <div className="logo"><i>M</i>MinuteFlow</div>
+          {NAV.map(n => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              end={n.to === '/'}
+              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+            >
+              {n.label}
+            </NavLink>
+          ))}
+        </aside>
+        <main className="content">
+          <Outlet />
+        </main>
+      </div>
+    </UndoToastProvider>
   )
 }

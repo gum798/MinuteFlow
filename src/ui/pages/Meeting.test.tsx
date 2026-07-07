@@ -2,7 +2,9 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { db } from '../../core/store/db'
-import { createMeeting, finishMeeting, appendSegment, appendAudioChunk } from '../../core/store/meetings'
+import { createMeeting, finishMeeting, appendSegment, appendAudioChunk, listMeetings } from '../../core/store/meetings'
+import AppShell from '../AppShell'
+import Home from './Home'
 import MeetingPage from './Meeting'
 
 vi.mock('../../core/audio/decode', () => ({
@@ -41,6 +43,20 @@ function renderPage(id: string) {
       <Routes>
         <Route path="/meeting/:id" element={<MeetingPage />} />
         <Route path="/" element={<div>홈화면</div>} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
+// 삭제/실행취소는 라우트 전환에도 살아남는 토스트가 필요하므로 AppShell(Provider) 레이아웃 + 실제 Home으로 렌더한다.
+function renderApp(id: string) {
+  return render(
+    <MemoryRouter initialEntries={[`/meeting/${id}`]}>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="/meeting/:id" element={<MeetingPage />} />
+          <Route path="/" element={<Home />} />
+        </Route>
       </Routes>
     </MemoryRouter>,
   )
@@ -142,23 +158,25 @@ test('오디오가 없으면 화자 구분 버튼이 없다', async () => {
   expect(screen.queryByRole('button', { name: /화자 구분/ })).not.toBeInTheDocument()
 })
 
-test('삭제를 확인하면 회의록이 지워지고 홈으로 이동한다', async () => {
+test('삭제하면 confirm 없이 홈으로 이동하고 실행취소 토스트가 뜨며 목록에서 제외된다', async () => {
   const m = await seed()
-  vi.spyOn(window, 'confirm').mockReturnValue(true)
-  renderPage(m.id)
+  renderApp(m.id)
   await waitFor(() => screen.getByRole('button', { name: '삭제' }))
   await userEvent.click(screen.getByRole('button', { name: '삭제' }))
-  await waitFor(() => expect(screen.getByText('홈화면')).toBeInTheDocument())
-  expect(await db.meetings.get(m.id)).toBeUndefined()
-  vi.restoreAllMocks()
+  // 홈 이동 + 실행취소 토스트 노출
+  await waitFor(() => expect(screen.getByRole('button', { name: '실행취소' })).toBeInTheDocument())
+  // soft-delete: listMeetings에서 제외되지만 DB에는 남아있다
+  expect((await listMeetings()).map(x => x.id)).not.toContain(m.id)
+  expect(await db.meetings.get(m.id)).toBeDefined()
 })
 
-test('삭제를 취소하면 회의록이 남는다', async () => {
+test('삭제 후 실행취소를 누르면 홈 목록에 복귀한다', async () => {
   const m = await seed()
-  vi.spyOn(window, 'confirm').mockReturnValue(false)
-  renderPage(m.id)
+  renderApp(m.id)
   await waitFor(() => screen.getByRole('button', { name: '삭제' }))
   await userEvent.click(screen.getByRole('button', { name: '삭제' }))
-  expect(await db.meetings.get(m.id)).toBeDefined()
-  vi.restoreAllMocks()
+  await waitFor(() => screen.getByRole('button', { name: '실행취소' }))
+  await userEvent.click(screen.getByRole('button', { name: '실행취소' }))
+  await waitFor(() => expect(screen.getByText(m.title)).toBeInTheDocument())
+  expect((await listMeetings()).map(x => x.id)).toContain(m.id)
 })

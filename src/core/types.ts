@@ -8,6 +8,8 @@ export interface Meeting {
   status: 'recording' | 'done'
   language: string
   speakerNames?: Record<string, string>
+  /** soft-delete 표시. 값이 있으면 목록에서 숨기고, 만료/정리 시 하드 삭제한다. (optional·비인덱스) */
+  deletedAt?: number
 }
 
 export interface AudioChunk {

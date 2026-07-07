@@ -4,6 +4,7 @@ import {
   updateMeetingTitle, listMeetings, getMeeting, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting,
   createUploadMeeting, replaceSegments, applySpeakers, updateSpeakerNames,
+  softDeleteMeeting, restoreMeeting, purgeDeleted,
 } from './meetings'
 
 beforeEach(async () => {
@@ -124,4 +125,42 @@ test('updateSpeakerNames는 회의에 이름 맵을 저장한다', async () => {
   const m = await createMeeting()
   await updateSpeakerNames(m.id, { SPK1: '김팀장' })
   expect((await getMeeting(m.id))?.speakerNames).toEqual({ SPK1: '김팀장' })
+})
+
+test('softDeleteMeeting하면 listMeetings에서 빠지지만 DB에는 남는다', async () => {
+  const m = await createMeeting()
+  await finishMeeting(m.id, 60)
+  await softDeleteMeeting(m.id)
+  expect((await listMeetings()).map(x => x.id)).not.toContain(m.id)
+  expect(await getMeeting(m.id)).toBeDefined() // 아직 하드 삭제 전(soft)
+})
+
+test('restoreMeeting하면 다시 listMeetings에 나타난다', async () => {
+  const m = await createMeeting()
+  await finishMeeting(m.id, 60)
+  await softDeleteMeeting(m.id)
+  await restoreMeeting(m.id)
+  expect((await listMeetings()).map(x => x.id)).toContain(m.id)
+})
+
+test('purgeDeleted는 soft-deleted 회의만 하위 데이터까지 완전 삭제한다', async () => {
+  const keep = await createMeeting()
+  await finishMeeting(keep.id, 60)
+  await appendAudioChunk(keep.id, 0, new Blob(['k']), 'audio/webm')
+
+  const gone = await createMeeting()
+  await finishMeeting(gone.id, 60)
+  await appendAudioChunk(gone.id, 0, new Blob(['g']), 'audio/webm')
+  await appendSegment({ meetingId: gone.id, startSec: 0, endSec: 1, text: 'g', source: 'webspeech', isFinal: true })
+  await softDeleteMeeting(gone.id)
+
+  await purgeDeleted()
+
+  // soft-deleted는 하위 데이터까지 완전 삭제
+  expect(await getMeeting(gone.id)).toBeUndefined()
+  expect(await db.audioChunks.where('meetingId').equals(gone.id).count()).toBe(0)
+  expect(await db.transcriptSegments.where('meetingId').equals(gone.id).count()).toBe(0)
+  // 삭제되지 않은 회의는 그대로 보존
+  expect(await getMeeting(keep.id)).toBeDefined()
+  expect(await db.audioChunks.where('meetingId').equals(keep.id).count()).toBe(1)
 })
