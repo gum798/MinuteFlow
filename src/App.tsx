@@ -3,6 +3,7 @@ import AppShell from './ui/AppShell'
 import Home from './ui/pages/Home'
 import Record from './ui/pages/Record'
 import MeetingPage from './ui/pages/Meeting'
+import Settings from './ui/pages/Settings'
 
 export default function App() {
   return (
@@ -12,7 +13,7 @@ export default function App() {
         <Route path="/record" element={<Record />} />
         <Route path="/meeting/:id" element={<MeetingPage />} />
         <Route path="/upload" element={<div />} />
-        <Route path="/settings" element={<div />} />
+        <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>
   )
