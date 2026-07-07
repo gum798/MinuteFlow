@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { loadSettings } from '../../core/settings'
 import { decodeTo16kMono } from '../../core/audio/decode'
 import { detectWebGPU, WhisperLocalEngine, type WhisperProgress } from '../../core/stt/whisperLocal'
@@ -34,7 +34,7 @@ export default function Upload() {
     let meetingId: string | null = null
     try {
       setStage('회의 생성 중…')
-      const meeting = await createUploadMeeting(title, 0, file, file.type || 'audio/mpeg')
+      const meeting = await createUploadMeeting(title, 0, file, file.type || 'audio/mpeg', settings.language)
       meetingId = meeting.id
       let segs: DraftSegment[]
       let durationSec = 0
@@ -113,6 +113,8 @@ export default function Upload() {
           onChange={e => setFile(e.target.files?.[0] ?? null)} />
       </div>
 
+      <p className="hint">1시간 이상 긴 파일이나 모바일에서는 Groq 키 사용(설정)이 훨씬 빠르고 안정적입니다.</p>
+
       <section className="card" style={{ marginTop: 16 }}>
         <h2>전사 엔진</h2>
         <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
@@ -124,7 +126,7 @@ export default function Upload() {
           <input type="radio" id="eng-groq" name="engine" disabled={!hasGroqKey}
             checked={engine === 'groq'} onChange={() => setEngine('groq')} />
           <label htmlFor="eng-groq">Groq (내 키) <span className="hint">
-            — 빠름 · 오디오가 Groq로 전송됨{!hasGroqKey && ' · 설정에서 키를 등록하세요'}</span></label>
+            — 빠름 · 오디오가 Groq로 전송됨</span>{!hasGroqKey && <> · <Link to="/settings">설정에서 키를 등록하세요</Link></>}</label>
         </div>
       </section>
 

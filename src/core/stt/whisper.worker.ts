@@ -24,7 +24,7 @@ self.onmessage = async (ev: MessageEvent<InMsg>) => {
         ...PER_DEVICE_CONFIG[device],
         progress_callback: (x: { status: string; file?: string; progress?: number }) => {
           if (x.status === 'progress') {
-            self.postMessage({ status: 'progress', file: x.file, progress: x.progress })
+            self.postMessage({ status: 'progress', file: x.file ?? '', progress: x.progress ?? 0 })
           }
         },
       })) as unknown as Transcriber

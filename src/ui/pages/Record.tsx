@@ -166,7 +166,6 @@ export default function Record() {
           {interim && <p style={{ color: 'var(--text-muted)' }}>{interim}</p>}
         </section>
       )}
-      {phase === 'stopping' && <p className="sub">저장 중…</p>}
     </div>
   )
 }

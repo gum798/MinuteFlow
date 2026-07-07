@@ -84,6 +84,10 @@ export default function MeetingPage() {
           }, p => { if (p.kind === 'status') setRetranscribing(p.message) })
         } finally { eng.dispose() }
       }
+      if (segs.length === 0) {
+        window.alert('전사 결과가 비어 있어 기존 내용을 유지합니다.')
+        return
+      }
       await replaceSegments(meeting.id, segs.map(s => ({ ...s, source, isFinal: true })))
       setSegments((await getSegments(meeting.id)).filter(s => s.isFinal))
     } catch (e) {

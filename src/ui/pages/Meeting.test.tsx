@@ -8,10 +8,11 @@ import MeetingPage from './Meeting'
 vi.mock('../../core/audio/decode', () => ({
   decodeTo16kMono: vi.fn(async () => new Float32Array(16000)),
 }))
+const transcribeMock = vi.fn(async () => [{ startSec: 0, endSec: 1, text: '재전사됨' }])
 vi.mock('../../core/stt/whisperLocal', () => ({
   detectWebGPU: vi.fn(async () => false),
   WhisperLocalEngine: class {
-    async transcribe() { return [{ startSec: 0, endSec: 1, text: '재전사됨' }] }
+    transcribe() { return transcribeMock() }
     dispose() {}
   },
 }))
@@ -78,6 +79,20 @@ test('오디오가 있으면 재전사 버튼이 보이고, 확인 후 세그먼
   await userEvent.click(screen.getByRole('button', { name: /재전사/ }))
   await waitFor(() => expect(screen.getByText('재전사됨')).toBeInTheDocument())
   expect(screen.queryByText('첫 발언')).not.toBeInTheDocument()
+  vi.restoreAllMocks()
+})
+
+test('재전사 결과가 비어 있으면 기존 세그먼트를 보존하고 안내한다', async () => {
+  const m = await seed()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+  transcribeMock.mockResolvedValueOnce([])
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: /재전사/ }))
+  await userEvent.click(screen.getByRole('button', { name: /재전사/ }))
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('전사 결과가 비어 있어 기존 내용을 유지합니다.'))
+  expect(screen.getByText('첫 발언')).toBeInTheDocument()
   vi.restoreAllMocks()
 })
 
