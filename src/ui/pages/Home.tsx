@@ -38,35 +38,53 @@ export default function Home() {
   const done = meetings.filter(m => m.status === 'done')
 
   return (
-    <main>
-      <h1>MinuteFlow</h1>
-      <p>
-        <Link to="/record">🎙️ 녹음 시작</Link>
-      </p>
+    <div>
+      <div className="row" style={{ marginBottom: 22 }}>
+        <div>
+          <h1>회의록</h1>
+          <p className="sub">모든 데이터는 이 브라우저에만 저장됩니다</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link to="/record" className="btn btn-primary">🎙️ 녹음 시작</Link>
+          <Link to="/upload" className="btn btn-outline">파일 업로드</Link>
+        </div>
+      </div>
       {interrupted.map(m => (
-        <div key={m.id} role="alert">
+        <div key={m.id} className="alert-warn alert" role="alert">
           복구할 녹음이 있습니다: {m.title}{' '}
-          <button onClick={() => recover(m.id)}>복구</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => recover(m.id)}>복구</button>
         </div>
       ))}
       {done.length === 0 ? (
-        <p>아직 회의록이 없습니다. 녹음을 시작해보세요.</p>
+        <p className="sub">아직 회의록이 없습니다. 녹음을 시작해보세요.</p>
       ) : (
-        <ul>
+        <div className="card-grid">
           {done.map(m => (
-            <li key={m.id}>
-              <Link to={`/meeting/${m.id}`}>{m.title}</Link>{' '}
-              ({formatTimestamp(m.durationSec)}){' '}
-              <button onClick={() => remove(m.id)}>삭제</button>
-            </li>
+            <div key={m.id} className="card hoverable">
+              <div className="row" style={{ marginBottom: 8 }}>
+                <Link to={`/meeting/${m.id}`}>{m.title}</Link>
+                <span className="badge badge-ok">확정</span>
+              </div>
+              <div className="row">
+                <span className="muted">
+                  {new Date(m.createdAt).toLocaleDateString('ko-KR')} · {formatTimestamp(m.durationSec)}
+                </span>
+                <button className="btn btn-ghost btn-sm" onClick={() => remove(m.id)}>삭제</button>
+              </div>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
       {usage && usage.quota > 0 && (
-        <footer>
-          저장 공간: {(usage.usage / 1e6).toFixed(1)}MB / {(usage.quota / 1e9).toFixed(1)}GB 사용 중
-        </footer>
+        <div style={{ marginTop: 24 }}>
+          <div className="progress" style={{ marginBottom: 6 }}>
+            <i style={{ width: `${Math.min(100, (usage.usage / usage.quota) * 100)}%` }} />
+          </div>
+          <p className="muted">
+            저장 공간: {(usage.usage / 1e6).toFixed(1)}MB / {(usage.quota / 1e9).toFixed(1)}GB 사용 중
+          </p>
+        </div>
       )}
-    </main>
+    </div>
   )
 }

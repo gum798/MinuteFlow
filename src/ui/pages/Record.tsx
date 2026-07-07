@@ -134,25 +134,39 @@ export default function Record() {
   }
 
   return (
-    <main>
-      <h1>녹음</h1>
-      {error && <div role="alert">{error}</div>}
+    <div>
+      <div className="row" style={{ marginBottom: 22 }}>
+        <div>
+          <h1>녹음</h1>
+          <p className="sub">
+            {phase === 'recording'
+              ? `⏺ 녹음 중 · ${formatTimestamp(elapsed)}`
+              : phase === 'stopping'
+                ? '저장 중…'
+                : '실시간 자막과 함께 회의를 녹음합니다'}
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {phase === 'idle' && (
+            <button className="btn btn-primary" onClick={() => void start()}>🎙️ 녹음 시작</button>
+          )}
+          {phase === 'recording' && (
+            <button className="btn btn-primary" onClick={() => void stop()}>종료</button>
+          )}
+        </div>
+      </div>
+      {error && <div className="alert alert-err" role="alert">{error}</div>}
       {!sttCtor && (
-        <p>이 브라우저는 실시간 자막을 지원하지 않습니다(Chrome 권장). 녹음은 정상 저장됩니다.</p>
+        <p className="hint">이 브라우저는 실시간 자막을 지원하지 않습니다(Chrome 권장). 녹음은 정상 저장됩니다.</p>
       )}
-      {sttCtor && <p><small>실시간 자막 사용 시 음성이 Google 서버로 전송됩니다.</small></p>}
-      {phase === 'idle' && <button onClick={() => void start()}>녹음 시작</button>}
+      {sttCtor && <p className="hint">실시간 자막 사용 시 음성이 Google 서버로 전송됩니다.</p>}
       {phase === 'recording' && (
-        <>
-          <p>⏺ {formatTimestamp(elapsed)}</p>
-          <button onClick={() => void stop()}>종료</button>
-          <section aria-label="실시간 자막">
-            {finals.map((t, i) => <p key={i}>{t}</p>)}
-            {interim && <p style={{ color: 'gray' }}>{interim}</p>}
-          </section>
-        </>
+        <section className="card" aria-label="실시간 자막" style={{ marginTop: 16 }}>
+          {finals.map((t, i) => <p key={i} style={{ color: 'var(--text-body)' }}>{t}</p>)}
+          {interim && <p style={{ color: 'var(--text-muted)' }}>{interim}</p>}
+        </section>
       )}
-      {phase === 'stopping' && <p>저장 중…</p>}
-    </main>
+      {phase === 'stopping' && <p className="sub">저장 중…</p>}
+    </div>
   )
 }

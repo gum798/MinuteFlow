@@ -30,8 +30,8 @@ export default function MeetingPage() {
     })()
   }, [id])
 
-  if (meeting === undefined) return <main><p>불러오는 중…</p></main>
-  if (meeting === null) return <main><p>회의록을 찾을 수 없습니다.</p><Link to="/">홈으로</Link></main>
+  if (meeting === undefined) return <div><p className="sub">불러오는 중…</p></div>
+  if (meeting === null) return <div><p className="sub">회의록을 찾을 수 없습니다.</p><Link to="/">홈으로</Link></div>
 
   async function saveTitle() {
     if (!meeting || !title.trim() || title === meeting.title) return
@@ -94,42 +94,48 @@ export default function MeetingPage() {
   }
 
   return (
-    <main>
+    <div>
       <p><Link to="/">← 홈</Link></p>
-      <input value={title} onChange={e => setTitle(e.target.value)} onBlur={() => void saveTitle()} aria-label="회의 제목" />
-      <p>길이: {formatTimestamp(meeting.durationSec)}</p>
-      {segments.length > 0 && (
-        <p>
+      <input
+        className="input"
+        value={title}
+        onChange={e => setTitle(e.target.value)}
+        onBlur={() => void saveTitle()}
+        aria-label="회의 제목"
+        style={{ fontSize: 20, fontWeight: 800, border: 'none', background: 'transparent', padding: 0 }}
+      />
+      <div className="row" style={{ justifyContent: 'flex-start', gap: 10, margin: '6px 0 18px' }}>
+        <span className="muted">길이: {formatTimestamp(meeting.durationSec)}</span>
+        {segments.length > 0 && (
           <span className={`badge ${segments[0].source === 'webspeech' ? 'badge-gray' : 'badge-accent'}`}>
             {segments[0].source === 'webspeech' ? '실시간 자막' : segments[0].source === 'whisper' ? 'Whisper 전사' : 'Groq 전사'}
           </span>
-        </p>
-      )}
-      <p>
-        <button onClick={() => exportAs('md')}>Markdown 내보내기</button>{' '}
-        <button onClick={() => exportAs('txt')}>TXT 내보내기</button>{' '}
-        <button onClick={() => void downloadAudio()}>오디오 다운로드</button>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 18 }}>
+        <button className="btn btn-outline btn-sm" onClick={() => exportAs('md')}>Markdown 내보내기</button>
+        <button className="btn btn-outline btn-sm" onClick={() => exportAs('txt')}>TXT 내보내기</button>
+        <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
         {audioAvailable && (
           <>
-            {' '}
-            <button className="btn btn-outline" disabled={retranscribing !== null} onClick={() => void retranscribe()}>
+            <button className="btn btn-outline btn-sm" disabled={retranscribing !== null} onClick={() => void retranscribe()}>
               {retranscribing ?? '고품질 재전사'}
-            </button>{' '}
+            </button>
             <span className="hint">{loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
           </>
         )}
-      </p>
+      </div>
       {segments.length === 0 ? (
-        <p>전사된 내용이 없습니다. (실시간 자막 미지원 환경에서 녹음된 회의는 Plan 2의 파일 전사로 처리할 수 있습니다)</p>
+        <p className="sub">전사된 내용이 없습니다. (실시간 자막 미지원 환경에서 녹음된 회의는 Plan 2의 파일 전사로 처리할 수 있습니다)</p>
       ) : (
-        <section>
+        <section className="card">
           {segments.map(s => (
-            <p key={s.id}>
-              <small>[{formatTimestamp(s.startSec)}]</small> {s.text}
+            <p key={s.id} className="row" style={{ justifyContent: 'flex-start', gap: 10, alignItems: 'baseline' }}>
+              <span className="seg-time">[{formatTimestamp(s.startSec)}]</span> {s.text}
             </p>
           ))}
         </section>
       )}
-    </main>
+    </div>
   )
 }

@@ -39,3 +39,11 @@ test('녹음 시작/업로드 링크가 있다', async () => {
   renderHome()
   await waitFor(() => expect(screen.getByRole('link', { name: /녹음 시작/ })).toHaveAttribute('href', '#/record'))
 })
+
+test('회의 카드에 테마 클래스가 적용된다', async () => {
+  const m = await createMeeting()
+  await finishMeeting(m.id, 60)
+  renderHome()
+  await waitFor(() => screen.getByText(m.title))
+  expect(screen.getByText(m.title).closest('.card')).not.toBeNull()
+})
