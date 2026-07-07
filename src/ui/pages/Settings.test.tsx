@@ -21,6 +21,13 @@ test('Groq 키를 저장하면 설정에 반영되고 토스트가 뜬다', asyn
   expect(screen.getByText(/저장되었습니다/)).toBeInTheDocument()
 })
 
+test('Gemini 키를 저장하면 설정에 반영된다', async () => {
+  renderPage()
+  await userEvent.type(screen.getByLabelText(/Gemini API 키/), 'AIza_x')
+  await userEvent.click(screen.getByRole('button', { name: /저장/ }))
+  await waitFor(() => expect(loadSettings().geminiApiKey).toBe('AIza_x'))
+})
+
 test('키는 브라우저에만 저장된다는 고지가 있다', () => {
   renderPage()
   expect(screen.getByText(/이 브라우저에만 저장/)).toBeInTheDocument()

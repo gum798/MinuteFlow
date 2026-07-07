@@ -26,6 +26,20 @@ export default function Settings() {
       <h1>설정</h1>
       <p className="sub">모든 설정과 키는 이 브라우저에만 저장되며 어떤 서버로도 전송되지 않습니다.</p>
 
+      <section className="card" style={{ marginTop: 22 }}>
+        <h2>AI 요약 키 (Gemini)</h2>
+        <p className="hint">
+          무료로 발급받아 넣으면 회의록 AI 요약을 쓸 수 있어요.{' '}
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Google AI Studio에서 발급</a>
+        </p>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label htmlFor="gemini-key">Gemini API 키</label>
+          <input id="gemini-key" type="password" className="input" placeholder="AIza..."
+            value={form.geminiApiKey}
+            onChange={e => setForm({ ...form, geminiApiKey: e.target.value })} />
+        </div>
+      </section>
+
       {GROQ_ENABLED && (
         <section className="card" style={{ marginTop: 22 }}>
           <h2>Groq API 키 (파일 전사 고속 처리)</h2>
