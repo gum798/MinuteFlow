@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { subscribeRecording, getRecordingState } from '../../core/recorder/session'
 import type { Meeting } from '../../core/types'
 import {
   listMeetings, findInterruptedMeetings, finalizeInterrupted,
@@ -15,6 +16,7 @@ export default function Home() {
   const [usage, setUsage] = useState<{ usage: number; quota: number } | null>(null)
   const navigate = useNavigate()
   const showUndoToast = useUndoToast()
+  const recording = useSyncExternalStore(subscribeRecording, getRecordingState)
 
   const refresh = useCallback(async () => {
     setMeetings(await listMeetings())
@@ -59,7 +61,13 @@ export default function Home() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <Link to="/upload" className="btn btn-outline">파일 업로드</Link>
-          <Link to="/record?autostart=1" className="btn btn-primary">🎙️ 녹음 시작</Link>
+          {recording.phase === 'idle' ? (
+            <Link to="/record?autostart=1" className="btn btn-primary">🎙️ 녹음 시작</Link>
+          ) : (
+            <Link to="/record" className="btn rec-chip" style={{ height: 38 }}>
+              <span className="dot" />녹음 중 · {formatTimestamp(recording.elapsedSec)}
+            </Link>
+          )}
         </div>
       </div>
       {interrupted.map(m => (
