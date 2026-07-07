@@ -2,7 +2,8 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { db } from '../../core/store/db'
-import { createMeeting, finishMeeting, appendSegment, appendAudioChunk, listMeetings } from '../../core/store/meetings'
+import { createMeeting, finishMeeting, appendSegment, appendAudioChunk, listMeetings, saveSummary } from '../../core/store/meetings'
+import { saveSettings } from '../../core/settings'
 import AppShell from '../AppShell'
 import Home from './Home'
 import MeetingPage from './Meeting'
@@ -25,9 +26,15 @@ vi.mock('../../core/diarize/diarizeLocal', () => ({
     dispose() {}
   },
 }))
+const summarizeMock = vi.fn(async (_prompt: string, _apiKey: string) => '## 요약 결과')
+vi.mock('../../core/summarize/gemini', () => ({
+  summarizeWithGemini: (prompt: string, apiKey: string) => summarizeMock(prompt, apiKey),
+}))
 
 beforeEach(async () => {
-  await Promise.all([db.meetings.clear(), db.audioChunks.clear(), db.transcriptSegments.clear()])
+  localStorage.clear()
+  summarizeMock.mockClear()
+  await Promise.all([db.meetings.clear(), db.audioChunks.clear(), db.transcriptSegments.clear(), db.summaries.clear()])
 })
 
 async function seed() {
@@ -179,4 +186,36 @@ test('삭제 후 실행취소를 누르면 홈 목록에 복귀한다', async ()
   await userEvent.click(screen.getByRole('button', { name: '실행취소' }))
   await waitFor(() => expect(screen.getByText(m.title)).toBeInTheDocument())
   expect((await listMeetings()).map(x => x.id)).toContain(m.id)
+})
+
+test('키가 없으면 [AI 프롬프트 복사]가 보이고, 클릭 시 프롬프트를 복사하고 토스트를 띄운다', async () => {
+  const m = await seed()
+  const writeText = vi.fn(async (_text: string) => {})
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: 'AI 프롬프트 복사' }))
+  expect(screen.queryByRole('button', { name: 'AI 요약' })).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'AI 프롬프트 복사' }))
+  await waitFor(() => expect(writeText).toHaveBeenCalled())
+  expect(writeText.mock.calls[0][0]).toContain('첫 발언')
+  expect(screen.getByText(/복사했어요! AI 채팅에 붙여넣어 주세요\./)).toBeInTheDocument()
+})
+
+test('키가 있으면 [AI 요약] 클릭 시 요약 카드가 뜨고 DB에 저장된다', async () => {
+  const m = await seed()
+  saveSettings({ geminiApiKey: 'k' })
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: 'AI 요약' }))
+  await userEvent.click(screen.getByRole('button', { name: 'AI 요약' }))
+  await waitFor(() => expect(screen.getByText(/요약 결과/)).toBeInTheDocument())
+  expect(summarizeMock).toHaveBeenCalled()
+  expect(await db.summaries.where('meetingId').equals(m.id).count()).toBe(1)
+})
+
+test('저장된 요약이 마운트 시 로드되어 보인다', async () => {
+  const m = await seed()
+  await saveSummary(m.id, 'minutes', '## 저장된 요약\n- 항목', 'gemini-3.5-flash')
+  renderPage(m.id)
+  await waitFor(() => expect(screen.getByText(/저장된 요약/)).toBeInTheDocument())
+  expect(screen.getByText('회의록', { selector: '.badge' })).toBeInTheDocument() // 템플릿 라벨 배지
 })

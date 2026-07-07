@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import type { Meeting, TranscriptSegment } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting } from '../../core/store/meetings'
+import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, saveSummary, getSummaries } from '../../core/store/meetings'
 import { useUndoToast } from '../UndoToast'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
+import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
+import { summarizeWithGemini } from '../../core/summarize/gemini'
 import { decodeTo16kMono } from '../../core/audio/decode'
 import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
 import { DiarizeEngine } from '../../core/diarize/diarizeLocal'
@@ -23,6 +25,10 @@ export default function MeetingPage() {
   const [audioAvailable, setAudioAvailable] = useState(false)
   const [retranscribing, setRetranscribing] = useState<string | null>(null)
   const [diarizing, setDiarizing] = useState<string | null>(null)
+  const [summaries, setSummaries] = useState<Summary[]>([])
+  const [template, setTemplate] = useState<SummaryTemplate>('minutes')
+  const [summarizing, setSummarizing] = useState(false)
+  const [copyToast, setCopyToast] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -33,6 +39,7 @@ export default function MeetingPage() {
         setTitle(m.title)
         setSegments((await getSegments(id)).filter(s => s.isFinal))
         setAudioAvailable((await getMeetingAudio(id)) !== null)
+        setSummaries(await getSummaries(id))
       }
     })()
   }, [id])
@@ -48,9 +55,35 @@ export default function MeetingPage() {
 
   function exportAs(format: 'md' | 'txt') {
     if (!meeting) return
-    const content = format === 'md' ? toMarkdown(meeting, segments) : toPlainText(meeting, segments)
+    const content = format === 'md' ? toMarkdown(meeting, segments, summaries) : toPlainText(meeting, segments)
     const type = format === 'md' ? 'text/markdown' : 'text/plain'
     downloadBlob(exportFilename(meeting, format), new Blob([content], { type }))
+  }
+
+  async function runSummarize() {
+    if (!meeting) return
+    setSummarizing(true)
+    try {
+      const prompt = buildSummaryPrompt(template, meeting, segments)
+      const markdown = await summarizeWithGemini(prompt, loadSettings().geminiApiKey)
+      await saveSummary(meeting.id, template, markdown, 'gemini-3.5-flash')
+      setSummaries(await getSummaries(meeting.id))
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSummarizing(false)
+    }
+  }
+
+  async function copyPrompt() {
+    if (!meeting) return
+    try {
+      await navigator.clipboard.writeText(buildSummaryPrompt(template, meeting, segments))
+      setCopyToast(true)
+      setTimeout(() => setCopyToast(false), 2000)
+    } catch {
+      window.alert('클립보드 복사에 실패했어요. 다시 시도해주세요.')
+    }
   }
 
   async function downloadAudio() {
@@ -192,8 +225,38 @@ export default function MeetingPage() {
             <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
           </>
         )}
+        {segments.length > 0 && (
+          <>
+            <select
+              className="input"
+              style={{ width: 'auto' }}
+              aria-label="요약 템플릿"
+              value={template}
+              onChange={e => setTemplate(e.target.value as SummaryTemplate)}
+            >
+              {(Object.keys(TEMPLATE_LABELS) as SummaryTemplate[]).map(t => (
+                <option key={t} value={t}>{TEMPLATE_LABELS[t]}</option>
+              ))}
+            </select>
+            {loadSettings().geminiApiKey.trim()
+              ? (
+                <button className="btn btn-primary btn-sm" disabled={summarizing} onClick={() => void runSummarize()}>
+                  {summarizing ? '요약 중…' : 'AI 요약'}
+                </button>
+              )
+              : (
+                <button className="btn btn-outline btn-sm" onClick={() => void copyPrompt()}>AI 프롬프트 복사</button>
+              )}
+          </>
+        )}
         <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} disabled={retranscribing !== null || diarizing !== null} onClick={() => void removeMeeting()}>삭제</button>
       </div>
+      {summaries.map(s => (
+        <section key={s.id} className="card" style={{ marginBottom: 12 }}>
+          <span className="badge badge-accent">{TEMPLATE_LABELS[s.template]}</span>
+          <div style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{s.markdown}</div>
+        </section>
+      ))}
       {segments.length === 0 ? (
         <p className="sub">
           {audioAvailable
@@ -222,6 +285,7 @@ export default function MeetingPage() {
           })}
         </section>
       )}
+      {copyToast && <div className="toast">복사했어요! AI 채팅에 붙여넣어 주세요.</div>}
     </div>
   )
 }

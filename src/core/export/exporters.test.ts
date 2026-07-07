@@ -1,5 +1,5 @@
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from './exporters'
-import type { Meeting, TranscriptSegment } from '../types'
+import type { Meeting, TranscriptSegment, Summary } from '../types'
 
 const meeting: Meeting = {
   id: 'm1', title: '주간회의', createdAt: new Date('2026-07-06T10:00:00').getTime(),
@@ -41,6 +41,21 @@ test('화자가 있으면 이름과 함께 내보낸다', () => {
 
 test('화자가 없으면 기존 형식 유지', () => {
   expect(toMarkdown(meeting, segments)).toContain('**[00:00]** 시작하겠습니다')
+})
+
+test('summaries를 넘기면 AI 요약 섹션을 전사 앞에 넣는다', () => {
+  const summaries: Summary[] = [
+    { meetingId: 'm1', template: 'minutes', markdown: '## 안건\n- 예산 검토', provider: 'gemini-3.5-flash', createdAt: 1 },
+    { meetingId: 'm1', template: 'brief', markdown: '예산을 검토했다.', provider: 'gemini-3.5-flash', createdAt: 2 },
+  ]
+  const md = toMarkdown(meeting, segments, summaries)
+  expect(md).toContain('## AI 요약 (회의록)')
+  expect(md).toContain('## AI 요약 (짧은 요약)')
+  expect(md).toContain('- 예산 검토')
+  // 요약 섹션은 전사 섹션보다 앞에 온다
+  expect(md.indexOf('## AI 요약')).toBeLessThan(md.indexOf('## 전사'))
+  // 인자 없으면 요약 섹션 없음 (기존 호출 무영향)
+  expect(toMarkdown(meeting, segments)).not.toContain('## AI 요약')
 })
 
 test('exportFilename은 날짜 프리픽스와 안전한 파일명', () => {

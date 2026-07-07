@@ -1,5 +1,6 @@
-import type { Meeting, TranscriptSegment } from '../types'
+import type { Meeting, TranscriptSegment, Summary } from '../types'
 import { formatTimestamp } from '../format'
+import { TEMPLATE_LABELS } from '../summarize/prompts'
 
 function finalSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
   return segments.filter(s => s.isFinal)
@@ -15,19 +16,26 @@ function displayName(meeting: Meeting, speaker: string): string {
   return meeting.speakerNames?.[speaker] ?? speaker
 }
 
-export function toMarkdown(meeting: Meeting, segments: TranscriptSegment[]): string {
+export function toMarkdown(meeting: Meeting, segments: TranscriptSegment[], summaries: Summary[] = []): string {
   const lines = finalSegments(segments).map(s => {
     const ts = `- **[${formatTimestamp(s.startSec)}]**`
     return s.speaker
       ? `${ts} **${displayName(meeting, s.speaker)}** — ${s.text}`
       : `${ts} ${s.text}`
   })
+  const summaryBlocks = summaries.flatMap(s => [
+    `## AI 요약 (${TEMPLATE_LABELS[s.template]})`,
+    '',
+    s.markdown,
+    '',
+  ])
   return [
     `# ${meeting.title}`,
     '',
     `- 일시: ${meetingDate(meeting)}`,
     `- 길이: ${formatTimestamp(meeting.durationSec)}`,
     '',
+    ...summaryBlocks,
     '## 전사',
     '',
     ...lines,
