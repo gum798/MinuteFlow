@@ -13,6 +13,14 @@ export default defineConfig({
         globIgnores: ['**/*.wasm'],           // onnxruntime wasm 22.5MiB — 프리캐시 제외 (Workbox 기본 2MiB 상한도 초과)
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         navigateFallback: 'index.html',
+        // wasm은 프리캐시 대신 첫 사용 시 CacheFirst로 확보 — 오프라인 전사 보장 (runtimeCaching은 크기 상한 미적용)
+        runtimeCaching: [
+          {
+            urlPattern: /\.wasm$/,
+            handler: 'CacheFirst',
+            options: { cacheName: 'onnx-wasm', expiration: { maxEntries: 4 } },
+          },
+        ],
       },
       manifest: {
         name: 'MinuteFlow — 음성 회의록',

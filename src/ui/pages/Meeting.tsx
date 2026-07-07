@@ -62,8 +62,12 @@ export default function MeetingPage() {
 
   async function exportDocx() {
     if (!meeting) return
-    const { toDocxBlob } = await import('../../core/export/docx')
-    downloadBlob(exportFilename(meeting, 'docx'), await toDocxBlob(meeting, segments, summaries))
+    try {
+      const { toDocxBlob } = await import('../../core/export/docx')
+      downloadBlob(exportFilename(meeting, 'docx'), await toDocxBlob(meeting, segments, summaries))
+    } catch {
+      window.alert('DOCX 모듈을 불러오지 못했습니다. 새로고침 후 다시 시도해주세요.')
+    }
   }
 
   async function runSummarize() {
