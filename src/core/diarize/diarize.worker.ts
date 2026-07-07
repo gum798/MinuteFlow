@@ -62,6 +62,7 @@ self.onmessage = async (ev: MessageEvent<{ type: 'diarize'; audio: Float32Array 
       const wave = audio.subarray(Math.floor(r.start * SAMPLE_RATE), Math.floor(r.end * SAMPLE_RATE))
       const inputs = await embProc(wave)
       const out = await embModel(inputs)
+      // TODO(실측): WeSpeaker 실모델의 출력 키를 브라우저 콘솔에서 1회 확인 (embeddings/embs/기타)
       const vec = (out.embeddings ?? out.embs ?? Object.values(out)[0]).data
       embeddings.push(new Float32Array(vec))
       if (i % 10 === 9) self.postMessage({ status: 'info', message: `화자 특징 추출 중… (${i + 1}/${targets.length})` })

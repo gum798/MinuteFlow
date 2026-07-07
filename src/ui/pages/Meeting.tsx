@@ -93,6 +93,9 @@ export default function MeetingPage() {
         return
       }
       await replaceSegments(meeting.id, segs.map(s => ({ ...s, source, isFinal: true })))
+      // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름이 다른 화자에 잘못 붙는 것 방지.
+      await updateSpeakerNames(meeting.id, {})
+      setMeeting({ ...meeting, speakerNames: {} })
       setSegments((await getSegments(meeting.id)).filter(s => s.isFinal))
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e))
@@ -184,6 +187,7 @@ export default function MeetingPage() {
               <p key={s.id} className="row" style={{ justifyContent: 'flex-start', gap: 10, alignItems: 'baseline' }}>
                 {s.speaker && color && (
                   <button
+                    type="button"
                     className="badge"
                     style={{ background: color.bg, color: color.fg }}
                     onClick={() => void renameSpeaker(s.speaker!)}
