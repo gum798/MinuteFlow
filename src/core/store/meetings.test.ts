@@ -3,7 +3,7 @@ import {
   createMeeting, appendAudioChunk, appendSegment, finishMeeting,
   updateMeetingTitle, listMeetings, getMeeting, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting,
-  createUploadMeeting, replaceSegments,
+  createUploadMeeting, replaceSegments, applySpeakers, updateSpeakerNames,
 } from './meetings'
 
 beforeEach(async () => {
@@ -107,4 +107,21 @@ test('replaceSegments는 기존 세그먼트를 전부 교체한다', async () =
   const segs = await getSegments(m.id)
   expect(segs.map(s => s.text)).toEqual(['새것1', '새것2'])
   expect(segs.every(s => s.source === 'whisper')).toBe(true)
+})
+
+test('applySpeakers는 세그먼트에 화자를 기록한다', async () => {
+  const m = await createMeeting()
+  await appendSegment({ meetingId: m.id, startSec: 0, endSec: 4, text: 'a', source: 'whisper', isFinal: true })
+  await appendSegment({ meetingId: m.id, startSec: 5, endSec: 7, text: 'b', source: 'whisper', isFinal: true })
+  await applySpeakers(m.id, [
+    { start: 0, end: 4.5, speaker: 'SPK1' }, { start: 4.5, end: 8, speaker: 'SPK2' },
+  ])
+  const segs = await getSegments(m.id)
+  expect(segs.map(s => s.speaker)).toEqual(['SPK1', 'SPK2'])
+})
+
+test('updateSpeakerNames는 회의에 이름 맵을 저장한다', async () => {
+  const m = await createMeeting()
+  await updateSpeakerNames(m.id, { SPK1: '김팀장' })
+  expect((await getMeeting(m.id))?.speakerNames).toEqual({ SPK1: '김팀장' })
 })

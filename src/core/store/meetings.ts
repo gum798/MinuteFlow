@@ -1,5 +1,6 @@
 import { db } from './db'
 import type { Meeting, TranscriptSegment } from '../types'
+import { assignSpeakers, type SpeakerRegion } from '../diarize/assign'
 
 const CHUNK_SEC = 10 // MediaRecorder timeslice와 일치 (Global Constraints)
 
@@ -97,6 +98,18 @@ export async function replaceSegments(
     await db.transcriptSegments.where('meetingId').equals(meetingId).delete()
     await db.transcriptSegments.bulkAdd(segs.map(s => ({ ...s, meetingId })))
   })
+}
+
+export async function applySpeakers(meetingId: string, regions: SpeakerRegion[]): Promise<void> {
+  await db.transaction('rw', [db.transcriptSegments], async () => {
+    const segs = await db.transcriptSegments.where('meetingId').equals(meetingId).toArray()
+    const assigned = assignSpeakers(segs, regions)
+    await db.transcriptSegments.bulkPut(assigned)
+  })
+}
+
+export async function updateSpeakerNames(meetingId: string, names: Record<string, string>): Promise<void> {
+  await db.meetings.update(meetingId, { speakerNames: names })
 }
 
 export async function deleteMeeting(id: string): Promise<void> {
