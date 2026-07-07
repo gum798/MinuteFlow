@@ -76,6 +76,29 @@ export async function finalizeInterrupted(id: string): Promise<Meeting | undefin
   return db.meetings.get(id)
 }
 
+export async function createUploadMeeting(
+  title: string, durationSec: number, blob: Blob, mimeType: string, language = 'ko-KR',
+): Promise<Meeting> {
+  const meeting: Meeting = {
+    id: crypto.randomUUID(), title, createdAt: Date.now(), durationSec, status: 'done', language,
+  }
+  const data = await blob.arrayBuffer()
+  await db.transaction('rw', [db.meetings, db.audioChunks], async () => {
+    await db.meetings.add(meeting)
+    await db.audioChunks.add({ meetingId: meeting.id, seq: 0, data, mimeType, startedAt: meeting.createdAt })
+  })
+  return meeting
+}
+
+export async function replaceSegments(
+  meetingId: string, segs: Omit<TranscriptSegment, 'id' | 'meetingId'>[],
+): Promise<void> {
+  await db.transaction('rw', [db.transcriptSegments], async () => {
+    await db.transcriptSegments.where('meetingId').equals(meetingId).delete()
+    await db.transcriptSegments.bulkAdd(segs.map(s => ({ ...s, meetingId })))
+  })
+}
+
 export async function deleteMeeting(id: string): Promise<void> {
   await db.transaction('rw', [db.meetings, db.audioChunks, db.transcriptSegments, db.summaries], async () => {
     await db.audioChunks.where('meetingId').equals(id).delete()

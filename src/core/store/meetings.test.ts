@@ -3,6 +3,7 @@ import {
   createMeeting, appendAudioChunk, appendSegment, finishMeeting,
   updateMeetingTitle, listMeetings, getMeeting, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting,
+  createUploadMeeting, replaceSegments,
 } from './meetings'
 
 beforeEach(async () => {
@@ -86,4 +87,24 @@ test('deleteMeeting은 하위 데이터까지 지운다', async () => {
   expect(await getMeeting(m.id)).toBeUndefined()
   expect(await db.audioChunks.where('meetingId').equals(m.id).count()).toBe(0)
   expect(await db.transcriptSegments.where('meetingId').equals(m.id).count()).toBe(0)
+})
+
+test('createUploadMeeting은 done 상태로 원본 오디오와 함께 생성된다', async () => {
+  const m = await createUploadMeeting('업로드 회의', 120, new Blob(['aud']), 'audio/mp4')
+  expect(m).toMatchObject({ title: '업로드 회의', durationSec: 120, status: 'done' })
+  const audio = await getMeetingAudio(m.id)
+  expect(await audio!.text()).toBe('aud')
+  expect(audio!.type).toBe('audio/mp4')
+})
+
+test('replaceSegments는 기존 세그먼트를 전부 교체한다', async () => {
+  const m = await createMeeting()
+  await appendSegment({ meetingId: m.id, startSec: 0, endSec: 1, text: '옛것', source: 'webspeech', isFinal: true })
+  await replaceSegments(m.id, [
+    { startSec: 0, endSec: 2, text: '새것1', source: 'whisper', isFinal: true },
+    { startSec: 2, endSec: 4, text: '새것2', source: 'whisper', isFinal: true },
+  ])
+  const segs = await getSegments(m.id)
+  expect(segs.map(s => s.text)).toEqual(['새것1', '새것2'])
+  expect(segs.every(s => s.source === 'whisper')).toBe(true)
 })
