@@ -162,11 +162,11 @@ export default function MeetingPage() {
         <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
         {audioAvailable && (
           <>
-            <button className="btn btn-outline btn-sm" disabled={retranscribing !== null} onClick={() => void retranscribe()}>
+            <button className="btn btn-outline btn-sm" disabled={retranscribing !== null || diarizing !== null} onClick={() => void retranscribe()}>
               {retranscribing ?? '고품질 재전사'}
             </button>
             {segments.length > 0 && (
-              <button className="btn btn-outline btn-sm" disabled={diarizing !== null} onClick={() => void diarize()}>
+              <button className="btn btn-outline btn-sm" disabled={retranscribing !== null || diarizing !== null} onClick={() => void diarize()}>
                 {diarizing ?? '화자 구분'}
               </button>
             )}
