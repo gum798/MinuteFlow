@@ -8,5 +8,5 @@ test('앱 타이틀이 렌더링된다', () => {
       <App />
     </MemoryRouter>,
   )
-  expect(screen.getByText(/MinuteFlow/)).toBeInTheDocument()
+  expect(screen.getAllByText(/MinuteFlow/).length).toBeGreaterThanOrEqual(1)
 })
