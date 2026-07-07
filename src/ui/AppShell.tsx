@@ -1,5 +1,8 @@
+import { useSyncExternalStore } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { UndoToastProvider } from './UndoToast'
+import { subscribeRecording, getRecordingState } from '../core/recorder/session'
+import { formatTimestamp } from '../core/format'
 
 const NAV = [
   { to: '/', label: '홈' },
@@ -9,6 +12,7 @@ const NAV = [
 ]
 
 export default function AppShell() {
+  const { phase, elapsedSec } = useSyncExternalStore(subscribeRecording, getRecordingState)
   return (
     <UndoToastProvider>
       <div className="shell">
@@ -24,6 +28,11 @@ export default function AppShell() {
               {n.label}
             </NavLink>
           ))}
+          {phase !== 'idle' && (
+            <NavLink to="/record" className="rec-chip">
+              <span className="dot" />녹음 중 · {formatTimestamp(elapsedSec)}
+            </NavLink>
+          )}
         </aside>
         <main className="content">
           <Outlet />
