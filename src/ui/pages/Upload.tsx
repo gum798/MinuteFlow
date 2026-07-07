@@ -77,7 +77,7 @@ export default function Upload() {
       navigate(`/meeting/${meetingId}`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      setError(msg.includes('디코딩')
+      setError(GROQ_ENABLED && msg.includes('디코딩')
         ? `${msg} — Groq 경로는 원본을 그대로 전송하므로 성공할 수 있습니다.`
         : msg)
       setBusy(false); setStage(''); setProgress(null)

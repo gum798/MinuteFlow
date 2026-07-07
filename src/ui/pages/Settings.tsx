@@ -51,7 +51,9 @@ export default function Settings() {
           <p className="hint" style={{ marginBottom: 10 }}>
             {webgpu === null ? '' : webgpu
               ? <span className="badge badge-ok">WebGPU 지원 — 고품질 모델 사용 가능</span>
-              : <span className="badge badge-warn">WebGPU 미지원 — 경량 모델 권장, Groq 키 사용을 추천합니다</span>}
+              : <span className="badge badge-warn">{GROQ_ENABLED
+                ? 'WebGPU 미지원 — 경량 모델 권장, Groq 키 사용을 추천합니다'
+                : 'WebGPU 미지원 — 경량 모델을 사용합니다'}</span>}
           </p>
           {MODELS.map(m => (
             <div key={m.id} className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
