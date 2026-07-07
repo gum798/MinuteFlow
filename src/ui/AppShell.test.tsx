@@ -49,7 +49,7 @@ test('idle이면 녹음 중 칩이 없다', () => {
   expect(screen.queryByText(/녹음 중/)).not.toBeInTheDocument()
 })
 
-test('녹음 중이면 상단에 "녹음 중 · MM:SS" 칩이 뜨고 /record로 링크된다', () => {
+test('녹음 중이면 상단에 "녹음 중 · MM:SS" 아일랜드가 뜨고 /record로 링크된다', () => {
   ;(getRecordingState as Mock).mockReturnValue({ ...IDLE, phase: 'recording', meetingId: 'm', elapsedSec: 65 })
   render(
     <HashRouter>
@@ -60,7 +60,15 @@ test('녹음 중이면 상단에 "녹음 중 · MM:SS" 칩이 뜨고 /record로 
       </Routes>
     </HashRouter>,
   )
-  const chip = screen.getByRole('link', { name: /녹음 중 · 01:05/ })
-  expect(chip).toHaveClass('rec-chip')
-  expect(chip).toHaveAttribute('href', '#/record')
+  const island = screen.getByRole('link', { name: /녹음 중/ })
+  expect(island).toHaveClass('island')
+  expect(island).toHaveTextContent('녹음 중 · 01:05')
+  expect(island).toHaveAttribute('href', '#/record')
+})
+
+test('하단 탭바에 이모지 글리프 4개가 렌더된다', () => {
+  renderShell()
+  for (const glyph of ['🏠', '🎙️', '📁', '⚙️']) {
+    expect(screen.getByText(glyph)).toBeInTheDocument()
+  }
 })
