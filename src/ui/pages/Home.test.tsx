@@ -37,7 +37,15 @@ test('중단된 회의가 있으면 복구 배너가 보인다', async () => {
 
 test('녹음 시작/업로드 링크가 있다', async () => {
   renderHome()
-  await waitFor(() => expect(screen.getByRole('link', { name: /녹음 시작/ })).toHaveAttribute('href', '#/record'))
+  await waitFor(() => expect(screen.getByRole('link', { name: /녹음 시작/ })).toHaveAttribute('href', '#/record?autostart=1'))
+})
+
+test('헤더에서 파일 업로드 링크가 녹음 시작 링크보다 먼저 나온다', async () => {
+  renderHome()
+  const upload = await screen.findByRole('link', { name: /파일 업로드/ })
+  const record = screen.getByRole('link', { name: /녹음 시작/ })
+  // upload가 문서상 record보다 앞서면 compareDocumentPosition에 FOLLOWING 비트가 선다.
+  expect(upload.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
 test('회의 카드에 테마 클래스가 적용된다', async () => {

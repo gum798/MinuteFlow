@@ -12,9 +12,9 @@ vi.mock('../../core/store/meetings', () => ({
   finishMeeting: vi.fn().mockResolvedValue(undefined),
 }))
 
-function renderRecord() {
+function renderRecord(entry = '/record') {
   return render(
-    <MemoryRouter initialEntries={['/record']}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/record" element={<Record />} />
         <Route path="/meeting/:id" element={<div>회의록 페이지</div>} />
@@ -44,6 +44,16 @@ test('Web Speech 미지원 브라우저 안내가 보인다', () => {
 test('시작 전에는 종료 버튼이 없다', () => {
   renderRecord()
   expect(screen.queryByRole('button', { name: /종료/ })).not.toBeInTheDocument()
+})
+
+test('autostart=1이면 클릭 없이 자동으로 녹음을 시작한다', async () => {
+  vi.stubGlobal('navigator', {
+    ...navigator,
+    mediaDevices: { getUserMedia: vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError')) },
+  })
+  renderRecord('/record?autostart=1')
+  // 클릭 없이 마운트 시 start() 자동 실행 → getUserMedia reject → 마이크 에러 alert
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/마이크/))
 })
 
 test('시작 도중 실패하면 마이크를 해제하고 에러를 보여준다', async () => {

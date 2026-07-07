@@ -45,8 +45,8 @@ export default function Home() {
           <p className="sub">모든 데이터는 이 브라우저에만 저장됩니다</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Link to="/record" className="btn btn-primary">🎙️ 녹음 시작</Link>
           <Link to="/upload" className="btn btn-outline">파일 업로드</Link>
+          <Link to="/record?autostart=1" className="btn btn-primary">🎙️ 녹음 시작</Link>
         </div>
       </div>
       {interrupted.map(m => (

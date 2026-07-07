@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { createMeeting, appendAudioChunk, appendSegment, finishMeeting } from '../../core/store/meetings'
 import { pickMimeType } from '../../core/recorder/mime'
 import { ChunkedRecorder } from '../../core/recorder/chunkedRecorder'
@@ -16,6 +16,8 @@ export default function Record() {
   const [interim, setInterim] = useState('')
   const [finals, setFinals] = useState<string[]>([])
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const autoStartedRef = useRef(false)
 
   const sttCtor = getSpeechRecognitionCtor()
 
@@ -32,6 +34,16 @@ export default function Record() {
   } | null>(null)
 
   useEffect(() => () => { void cleanup() }, [])
+
+  useEffect(() => {
+    // autostart=1로 진입하면 마운트 시 한 번 자동으로 녹음을 시작한다.
+    // ref 가드로 StrictMode dev 이중 마운트에서 회의가 2개 생기는 것을 방지한다.
+    if (searchParams.get('autostart') === '1' && !autoStartedRef.current) {
+      autoStartedRef.current = true
+      void start()
+    }
+    // eslint 규칙 없음 — deps는 [] (마운트 1회, ref 가드가 StrictMode 이중 실행 방지)
+  }, [])
 
   async function cleanup() {
     const s = session.current

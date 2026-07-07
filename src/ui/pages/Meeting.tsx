@@ -184,7 +184,7 @@ export default function MeetingPage() {
             <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
           </>
         )}
-        <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} onClick={() => void removeMeeting()}>삭제</button>
+        <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} disabled={retranscribing !== null || diarizing !== null} onClick={() => void removeMeeting()}>삭제</button>
       </div>
       {segments.length === 0 ? (
         <p className="sub">
