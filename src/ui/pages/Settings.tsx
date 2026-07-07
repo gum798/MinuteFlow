@@ -28,8 +28,9 @@ export default function Settings() {
       <section className="card" style={{ marginTop: 22 }}>
         <h2>Groq API 키 (파일 전사 고속 처리)</h2>
         <p className="hint">
-          <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com</a>에서
-          무료로 발급받을 수 있습니다. 무료 한도: 하루 오디오 8시간.
+          무료로 발급받아 넣으면 파일 전사가 훨씬 빨라져요.{' '}
+          <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com에서 발급</a>
+          {' '}(무료 한도: 하루 오디오 8시간)
         </p>
         <div className="field" style={{ marginTop: 10 }}>
           <label htmlFor="groq-key">Groq API 키</label>
@@ -39,35 +40,39 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="card" style={{ marginTop: 16 }}>
-        <h2>브라우저 Whisper 모델</h2>
-        <p className="hint" style={{ marginBottom: 10 }}>
-          {webgpu === null ? '' : webgpu
-            ? <span className="badge badge-ok">WebGPU 지원 — 고품질 모델 사용 가능</span>
-            : <span className="badge badge-warn">WebGPU 미지원 — 경량 모델 권장, Groq 키 사용을 추천합니다</span>}
-        </p>
-        {MODELS.map(m => (
-          <div key={m.id} className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <input type="radio" id={m.id} name="model" checked={form.whisperModel === m.id}
-              onChange={() => setForm({ ...form, whisperModel: m.id })} />
-            <label htmlFor={m.id}>{m.label} <span className="hint">— {m.desc}</span></label>
-          </div>
-        ))}
-      </section>
+      <details className="advanced" style={{ marginTop: 16 }}>
+        <summary>고급 설정 (전사 모델·언어)</summary>
 
-      <section className="card" style={{ marginTop: 16 }}>
-        <h2>언어</h2>
-        <div className="field" style={{ marginTop: 10 }}>
-          <label htmlFor="lang">전사 언어</label>
-          <select id="lang" className="input" value={form.language}
-            onChange={e => setForm({ ...form, language: e.target.value })}>
-            <option value="ko">한국어</option>
-            <option value="en">English</option>
-            <option value="ja">日本語</option>
-            <option value="zh">中文</option>
-          </select>
-        </div>
-      </section>
+        <section className="card">
+          <h2>브라우저 Whisper 모델</h2>
+          <p className="hint" style={{ marginBottom: 10 }}>
+            {webgpu === null ? '' : webgpu
+              ? <span className="badge badge-ok">WebGPU 지원 — 고품질 모델 사용 가능</span>
+              : <span className="badge badge-warn">WebGPU 미지원 — 경량 모델 권장, Groq 키 사용을 추천합니다</span>}
+          </p>
+          {MODELS.map(m => (
+            <div key={m.id} className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <input type="radio" id={m.id} name="model" checked={form.whisperModel === m.id}
+                onChange={() => setForm({ ...form, whisperModel: m.id })} />
+              <label htmlFor={m.id}>{m.label} <span className="hint">— {m.desc}</span></label>
+            </div>
+          ))}
+        </section>
+
+        <section className="card" style={{ marginTop: 16 }}>
+          <h2>언어</h2>
+          <div className="field" style={{ marginTop: 10 }}>
+            <label htmlFor="lang">전사 언어</label>
+            <select id="lang" className="input" value={form.language}
+              onChange={e => setForm({ ...form, language: e.target.value })}>
+              <option value="ko">한국어</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+              <option value="zh">中文</option>
+            </select>
+          </div>
+        </section>
+      </details>
 
       <p style={{ marginTop: 18 }}>
         <button className="btn btn-primary" onClick={save}>저장</button>
