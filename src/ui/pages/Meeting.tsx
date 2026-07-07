@@ -8,6 +8,7 @@ import { loadSettings } from '../../core/settings'
 import { decodeTo16kMono } from '../../core/audio/decode'
 import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
 import { transcribeSamplesWithGroq } from '../../core/stt/groq'
+import { GROQ_ENABLED } from '../../core/features'
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
@@ -64,7 +65,7 @@ export default function MeetingPage() {
       const samples = await decodeTo16kMono(await blob.arrayBuffer())
       let segs
       let source: 'whisper' | 'groq'
-      if (settings.groqApiKey) {
+      if (GROQ_ENABLED && settings.groqApiKey) {
         source = 'groq'
         setRetranscribing('Groq로 전사 중…')
         segs = await transcribeSamplesWithGroq(samples, {
@@ -125,7 +126,7 @@ export default function MeetingPage() {
             <button className="btn btn-outline btn-sm" disabled={retranscribing !== null} onClick={() => void retranscribe()}>
               {retranscribing ?? '고품질 재전사'}
             </button>
-            <span className="hint">{loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
+            <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
           </>
         )}
       </div>

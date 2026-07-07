@@ -4,6 +4,9 @@ import { MemoryRouter } from 'react-router-dom'
 import { loadSettings } from '../../core/settings'
 import Settings from './Settings'
 
+// 숨겨진 Groq 키 UI의 회귀 방지를 위해 플래그를 켠 상태로 계속 검증한다.
+vi.mock('../../core/features', () => ({ GROQ_ENABLED: true }))
+
 beforeEach(() => localStorage.clear())
 
 function renderPage() {

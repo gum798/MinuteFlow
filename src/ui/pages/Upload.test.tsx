@@ -5,6 +5,8 @@ import { db } from '../../core/store/db'
 import { saveSettings } from '../../core/settings'
 import Upload from './Upload'
 
+// 숨겨진 Groq 경로의 회귀 방지를 위해 플래그를 켠 상태로 계속 검증한다.
+vi.mock('../../core/features', () => ({ GROQ_ENABLED: true }))
 vi.mock('../../core/audio/decode', () => ({
   decodeTo16kMono: vi.fn(async () => new Float32Array(16000 * 2)), // 2초
 }))

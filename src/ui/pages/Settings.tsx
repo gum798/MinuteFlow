@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { loadSettings, saveSettings, type WhisperModelId } from '../../core/settings'
 import { detectWebGPU } from '../../core/stt/whisperLocal'
+import { GROQ_ENABLED } from '../../core/features'
 
 const MODELS: { id: WhisperModelId; label: string; desc: string }[] = [
   { id: 'onnx-community/whisper-large-v3-turbo', label: 'whisper-large-v3-turbo', desc: '고품질 · 다운로드 약 560MB · WebGPU 권장' },
@@ -25,20 +26,22 @@ export default function Settings() {
       <h1>설정</h1>
       <p className="sub">모든 설정과 키는 이 브라우저에만 저장되며 어떤 서버로도 전송되지 않습니다.</p>
 
-      <section className="card" style={{ marginTop: 22 }}>
-        <h2>Groq API 키 (파일 전사 고속 처리)</h2>
-        <p className="hint">
-          무료로 발급받아 넣으면 파일 전사가 훨씬 빨라져요.{' '}
-          <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com에서 발급</a>
-          {' '}(무료 한도: 하루 오디오 8시간)
-        </p>
-        <div className="field" style={{ marginTop: 10 }}>
-          <label htmlFor="groq-key">Groq API 키</label>
-          <input id="groq-key" type="password" className="input" placeholder="gsk_..."
-            value={form.groqApiKey}
-            onChange={e => setForm({ ...form, groqApiKey: e.target.value })} />
-        </div>
-      </section>
+      {GROQ_ENABLED && (
+        <section className="card" style={{ marginTop: 22 }}>
+          <h2>Groq API 키 (파일 전사 고속 처리)</h2>
+          <p className="hint">
+            무료로 발급받아 넣으면 파일 전사가 훨씬 빨라져요.{' '}
+            <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com에서 발급</a>
+            {' '}(무료 한도: 하루 오디오 8시간)
+          </p>
+          <div className="field" style={{ marginTop: 10 }}>
+            <label htmlFor="groq-key">Groq API 키</label>
+            <input id="groq-key" type="password" className="input" placeholder="gsk_..."
+              value={form.groqApiKey}
+              onChange={e => setForm({ ...form, groqApiKey: e.target.value })} />
+          </div>
+        </section>
+      )}
 
       <details className="advanced" style={{ marginTop: 16 }}>
         <summary>고급 설정 (전사 모델·언어)</summary>

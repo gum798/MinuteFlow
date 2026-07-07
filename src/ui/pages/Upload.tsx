@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { loadSettings } from '../../core/settings'
+import { GROQ_ENABLED } from '../../core/features'
 import { decodeTo16kMono } from '../../core/audio/decode'
 import { detectWebGPU, WhisperLocalEngine, type WhisperProgress } from '../../core/stt/whisperLocal'
 import { transcribeBlobWithGroq, transcribeSamplesWithGroq, GROQ_FILE_LIMIT } from '../../core/stt/groq'
@@ -12,7 +13,7 @@ type Engine = 'whisper' | 'groq'
 export default function Upload() {
   const settings = loadSettings()
   const [file, setFile] = useState<File | null>(null)
-  const [engine, setEngine] = useState<Engine>(() => settings.groqApiKey ? 'groq' : 'whisper')
+  const [engine, setEngine] = useState<Engine>(() => GROQ_ENABLED && settings.groqApiKey ? 'groq' : 'whisper')
   const [busy, setBusy] = useState(false)
   const [stage, setStage] = useState('')
   const [progress, setProgress] = useState<number | null>(null)
@@ -113,22 +114,24 @@ export default function Upload() {
           onChange={e => setFile(e.target.files?.[0] ?? null)} />
       </div>
 
-      <details className="card advanced" style={{ marginTop: 16 }}>
-        <summary>고급 설정</summary>
-        <h2>전사 엔진</h2>
-        <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
-          <input type="radio" id="eng-whisper" name="engine"
-            checked={engine === 'whisper'} onChange={() => setEngine('whisper')} />
-          <label htmlFor="eng-whisper">브라우저 Whisper <span className="hint">— 음성이 기기 밖으로 나가지 않음 · 최초 1회 모델 다운로드</span></label>
-        </div>
-        <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <input type="radio" id="eng-groq" name="engine" disabled={!hasGroqKey}
-            checked={engine === 'groq'} onChange={() => setEngine('groq')} />
-          <label htmlFor="eng-groq">Groq (내 키) <span className="hint">
-            — 빠름 · 오디오가 Groq로 전송됨</span>{!hasGroqKey && <> · <Link to="/settings">설정에서 키를 등록하세요</Link></>}</label>
-        </div>
-        <p className="hint">1시간 이상 긴 파일이나 모바일에서는 Groq 키 사용(설정)이 훨씬 빠르고 안정적입니다.</p>
-      </details>
+      {GROQ_ENABLED && (
+        <details className="card advanced" style={{ marginTop: 16 }}>
+          <summary>고급 설정</summary>
+          <h2>전사 엔진</h2>
+          <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <input type="radio" id="eng-whisper" name="engine"
+              checked={engine === 'whisper'} onChange={() => setEngine('whisper')} />
+            <label htmlFor="eng-whisper">브라우저 Whisper <span className="hint">— 음성이 기기 밖으로 나가지 않음 · 최초 1회 모델 다운로드</span></label>
+          </div>
+          <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <input type="radio" id="eng-groq" name="engine" disabled={!hasGroqKey}
+              checked={engine === 'groq'} onChange={() => setEngine('groq')} />
+            <label htmlFor="eng-groq">Groq (내 키) <span className="hint">
+              — 빠름 · 오디오가 Groq로 전송됨</span>{!hasGroqKey && <> · <Link to="/settings">설정에서 키를 등록하세요</Link></>}</label>
+          </div>
+          <p className="hint">1시간 이상 긴 파일이나 모바일에서는 Groq 키 사용(설정)이 훨씬 빠르고 안정적입니다.</p>
+        </details>
+      )}
 
       <p style={{ marginTop: 18 }}>
         <button className="btn btn-primary" disabled={!file || busy} onClick={() => void start()}>
