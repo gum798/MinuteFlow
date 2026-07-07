@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments } from '../../core/store/meetings'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames } from '../../core/store/meetings'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
 import { decodeTo16kMono } from '../../core/audio/decode'
 import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
+import { DiarizeEngine } from '../../core/diarize/diarizeLocal'
+import { speakerColor } from '../../core/diarize/speakerColors'
 import { transcribeSamplesWithGroq } from '../../core/stt/groq'
 import { GROQ_ENABLED } from '../../core/features'
 
@@ -17,6 +19,7 @@ export default function MeetingPage() {
   const [title, setTitle] = useState('')
   const [audioAvailable, setAudioAvailable] = useState(false)
   const [retranscribing, setRetranscribing] = useState<string | null>(null)
+  const [diarizing, setDiarizing] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -98,6 +101,42 @@ export default function MeetingPage() {
     }
   }
 
+  async function diarize() {
+    if (!meeting) return
+    setDiarizing('오디오 준비 중…')
+    const engine = new DiarizeEngine()
+    try {
+      const blob = await getMeetingAudio(meeting.id)
+      if (!blob) return
+      const samples = await decodeTo16kMono(await blob.arrayBuffer())
+      setDiarizing('화자 구분 중…')
+      const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setDiarizing(p.message) })
+      if (regions.length === 0) {
+        window.alert('화자를 구분할 수 없었습니다.')
+        return
+      }
+      await applySpeakers(meeting.id, regions)
+      setSegments((await getSegments(meeting.id)).filter(s => s.isFinal))
+      const m = await getMeeting(meeting.id)
+      if (m) setMeeting(m)
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
+    } finally {
+      engine.dispose()
+      setDiarizing(null)
+    }
+  }
+
+  async function renameSpeaker(speaker: string) {
+    if (!meeting) return
+    const current = meeting.speakerNames?.[speaker] ?? speaker
+    const input = window.prompt('이 화자의 이름을 입력하세요', current)
+    if (!input || !input.trim()) return
+    const names = { ...meeting.speakerNames, [speaker]: input.trim() }
+    setMeeting({ ...meeting, speakerNames: names })
+    await updateSpeakerNames(meeting.id, names)
+  }
+
   return (
     <div>
       <p><Link to="/">← 홈</Link></p>
@@ -126,6 +165,11 @@ export default function MeetingPage() {
             <button className="btn btn-outline btn-sm" disabled={retranscribing !== null} onClick={() => void retranscribe()}>
               {retranscribing ?? '고품질 재전사'}
             </button>
+            {segments.length > 0 && (
+              <button className="btn btn-outline btn-sm" disabled={diarizing !== null} onClick={() => void diarize()}>
+                {diarizing ?? '화자 구분'}
+              </button>
+            )}
             <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
           </>
         )}
@@ -134,11 +178,23 @@ export default function MeetingPage() {
         <p className="sub">전사된 내용이 없습니다. (실시간 자막 미지원 환경에서 녹음된 회의는 Plan 2의 파일 전사로 처리할 수 있습니다)</p>
       ) : (
         <section className="card">
-          {segments.map(s => (
-            <p key={s.id} className="row" style={{ justifyContent: 'flex-start', gap: 10, alignItems: 'baseline' }}>
-              <span className="seg-time">[{formatTimestamp(s.startSec)}]</span> {s.text}
-            </p>
-          ))}
+          {segments.map(s => {
+            const color = s.speaker ? speakerColor(s.speaker) : null
+            return (
+              <p key={s.id} className="row" style={{ justifyContent: 'flex-start', gap: 10, alignItems: 'baseline' }}>
+                {s.speaker && color && (
+                  <button
+                    className="badge"
+                    style={{ background: color.bg, color: color.fg }}
+                    onClick={() => void renameSpeaker(s.speaker!)}
+                  >
+                    {meeting.speakerNames?.[s.speaker] ?? s.speaker}
+                  </button>
+                )}
+                <span className="seg-time">[{formatTimestamp(s.startSec)}]</span> {s.text}
+              </p>
+            )
+          })}
         </section>
       )}
     </div>

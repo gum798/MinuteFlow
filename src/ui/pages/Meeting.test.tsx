@@ -16,6 +16,13 @@ vi.mock('../../core/stt/whisperLocal', () => ({
     dispose() {}
   },
 }))
+const diarizeMock = vi.fn(async () => [{ start: 0, end: 5, speaker: 'SPK1' }])
+vi.mock('../../core/diarize/diarizeLocal', () => ({
+  DiarizeEngine: class {
+    diarize() { return diarizeMock() }
+    dispose() {}
+  },
+}))
 
 beforeEach(async () => {
   await Promise.all([db.meetings.clear(), db.audioChunks.clear(), db.transcriptSegments.clear()])
@@ -101,4 +108,35 @@ test('오디오가 없으면 재전사 버튼이 없다', async () => {
   renderPage(m.id)
   await waitFor(() => screen.getByText('첫 발언'))
   expect(screen.queryByRole('button', { name: /재전사/ })).not.toBeInTheDocument()
+})
+
+test('화자 구분을 실행하면 배지가 보이고 세그먼트에 speaker가 저장된다', async () => {
+  const m = await seed()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: /화자 구분/ }))
+  await userEvent.click(screen.getByRole('button', { name: /화자 구분/ }))
+  await waitFor(() => expect(screen.getByText('SPK1')).toBeInTheDocument())
+  const segs = await db.transcriptSegments.where('meetingId').equals(m.id).toArray()
+  expect(segs.some(s => s.speaker === 'SPK1')).toBe(true)
+})
+
+test('배지를 클릭하고 이름을 입력하면 표시 이름이 바뀐다', async () => {
+  const m = await seed()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  vi.spyOn(window, 'prompt').mockReturnValue('김팀장')
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: /화자 구분/ }))
+  await userEvent.click(screen.getByRole('button', { name: /화자 구분/ }))
+  await waitFor(() => screen.getByText('SPK1'))
+  await userEvent.click(screen.getByText('SPK1'))
+  await waitFor(() => expect(screen.getByText('김팀장')).toBeInTheDocument())
+  vi.restoreAllMocks()
+})
+
+test('오디오가 없으면 화자 구분 버튼이 없다', async () => {
+  const m = await seed() // 오디오 없음
+  renderPage(m.id)
+  await waitFor(() => screen.getByText('첫 발언'))
+  expect(screen.queryByRole('button', { name: /화자 구분/ })).not.toBeInTheDocument()
 })
