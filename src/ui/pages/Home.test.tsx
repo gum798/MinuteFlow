@@ -39,6 +39,28 @@ test('중단된 회의가 있으면 복구 배너가 보인다', async () => {
   await waitFor(() => expect(screen.getByText(/복구할 녹음/)).toBeInTheDocument())
 })
 
+test('복구 배너에서 삭제하면 배너가 사라지고 실행취소 토스트가 뜬다', async () => {
+  await createMeeting() // status: recording → 중단된 회의 배너
+  renderHome()
+  await waitFor(() => screen.getByText(/복구할 녹음/))
+  const banner = screen.getByRole('alert')
+  await userEvent.click(within(banner).getByRole('button', { name: '삭제' }))
+  await waitFor(() => expect(screen.queryByText(/복구할 녹음/)).not.toBeInTheDocument())
+  expect(screen.getByRole('status')).toHaveTextContent('삭제')
+  expect(screen.getByRole('button', { name: '실행취소' })).toBeInTheDocument()
+})
+
+test('복구 배너에서 삭제 후 실행취소를 누르면 배너가 복귀한다', async () => {
+  await createMeeting()
+  renderHome()
+  await waitFor(() => screen.getByText(/복구할 녹음/))
+  const banner = screen.getByRole('alert')
+  await userEvent.click(within(banner).getByRole('button', { name: '삭제' }))
+  await waitFor(() => expect(screen.queryByText(/복구할 녹음/)).not.toBeInTheDocument())
+  await userEvent.click(screen.getByRole('button', { name: '실행취소' }))
+  await waitFor(() => expect(screen.getByText(/복구할 녹음/)).toBeInTheDocument())
+})
+
 test('녹음 시작/업로드 링크가 있다', async () => {
   renderHome()
   await waitFor(() => expect(screen.getByRole('link', { name: /녹음 시작/ })).toHaveAttribute('href', '#/record?autostart=1'))
