@@ -1,5 +1,5 @@
 import { db } from './db'
-import type { Meeting, TranscriptSegment } from '../types'
+import type { Meeting, TranscriptSegment, Summary } from '../types'
 import { assignSpeakers, type SpeakerRegion } from '../diarize/assign'
 
 const CHUNK_SEC = 10 // MediaRecorder timeslice와 일치 (Global Constraints)
@@ -119,6 +119,22 @@ export async function deleteMeeting(id: string): Promise<void> {
     await db.summaries.where('meetingId').equals(id).delete()
     await db.meetings.delete(id)
   })
+}
+
+export async function saveSummary(
+  meetingId: string, template: Summary['template'], markdown: string, provider: string,
+): Promise<void> {
+  await db.transaction('rw', [db.summaries], async () => {
+    const olds = await db.summaries.where('meetingId').equals(meetingId).toArray()
+    const dup = olds.filter(s => s.template === template).map(s => s.id!)
+    if (dup.length) await db.summaries.bulkDelete(dup)
+    await db.summaries.add({ meetingId, template, markdown, provider, createdAt: Date.now() })
+  })
+}
+
+export async function getSummaries(meetingId: string): Promise<Summary[]> {
+  const rows = await db.summaries.where('meetingId').equals(meetingId).toArray()
+  return rows.sort((a, b) => b.createdAt - a.createdAt)
 }
 
 /** 회의를 목록에서 즉시 숨긴다(하위 데이터·오디오는 그대로 두어 실행취소를 값싸게 만든다). */

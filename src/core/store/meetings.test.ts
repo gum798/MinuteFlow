@@ -5,6 +5,7 @@ import {
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting,
   createUploadMeeting, replaceSegments, applySpeakers, updateSpeakerNames,
   softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
+  saveSummary, getSummaries,
 } from './meetings'
 
 beforeEach(async () => {
@@ -198,4 +199,21 @@ test('restore된 회의에 purgeMeeting을 호출하면 no-op (경합 방어)', 
   await purgeMeeting(m.id)
   expect(await getMeeting(m.id)).toBeDefined()
   expect((await listMeetings()).map(x => x.id)).toContain(m.id)
+})
+
+test('saveSummary는 템플릿당 최신 1개만 유지한다', async () => {
+  const m = await createMeeting()
+  await saveSummary(m.id, 'minutes', '# 첫번째', 'gemini-3.5-flash')
+  await saveSummary(m.id, 'minutes', '# 두번째', 'gemini-3.5-flash')
+  await saveSummary(m.id, 'brief', '짧은', 'gemini-3.5-flash')
+  const sums = await getSummaries(m.id)
+  expect(sums).toHaveLength(2)
+  expect(sums.find(s => s.template === 'minutes')?.markdown).toBe('# 두번째')
+})
+
+test('getSummaries는 다른 회의를 섞지 않는다', async () => {
+  const a = await createMeeting(); const b = await createMeeting()
+  await saveSummary(a.id, 'brief', 'A', 'x')
+  await saveSummary(b.id, 'brief', 'B', 'x')
+  expect((await getSummaries(a.id)).map(s => s.markdown)).toEqual(['A'])
 })
