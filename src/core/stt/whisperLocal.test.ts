@@ -65,6 +65,24 @@ test('dispose는 워커를 종료한다', () => {
   expect(FakeWorker.instances[0].terminated).toBe(true)
 })
 
+test('진행 중 두 번째 transcribe 호출은 즉시 reject된다', async () => {
+  const engine = makeEngine()
+  const first = engine.transcribe(new Float32Array(1), { model: 'm', device: 'wasm', language: 'ko' })
+  const second = engine.transcribe(new Float32Array(1), { model: 'm', device: 'wasm', language: 'ko' })
+  await expect(second).rejects.toThrow('이미 전사가 진행 중입니다')
+  expect(FakeWorker.instances).toHaveLength(1) // 두 번째 호출은 워커를 새로 만들지 않는다
+  FakeWorker.instances[0].emit({ status: 'done', chunks: [] })
+  expect(await first).toEqual([]) // 첫 작업은 정상 완료된다
+})
+
+test('dispose는 진행 중 Promise를 취소 에러로 reject한다', async () => {
+  const engine = makeEngine()
+  const p = engine.transcribe(new Float32Array(1), { model: 'm', device: 'wasm', language: 'ko' })
+  engine.dispose()
+  await expect(p).rejects.toThrow('전사가 취소되었습니다')
+  expect(FakeWorker.instances[0].terminated).toBe(true)
+})
+
 test('detectWebGPU는 adapter가 null이면 false', async () => {
   vi.stubGlobal('navigator', { ...navigator, gpu: { requestAdapter: async () => null } })
   expect(await detectWebGPU()).toBe(false)
