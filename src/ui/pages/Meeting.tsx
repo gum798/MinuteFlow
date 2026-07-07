@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames } from '../../core/store/meetings'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames, deleteMeeting } from '../../core/store/meetings'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
@@ -14,6 +14,7 @@ import { GROQ_ENABLED } from '../../core/features'
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [meeting, setMeeting] = useState<Meeting | null | undefined>(undefined)
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [title, setTitle] = useState('')
@@ -140,6 +141,13 @@ export default function MeetingPage() {
     await updateSpeakerNames(meeting.id, names)
   }
 
+  async function removeMeeting() {
+    if (!meeting) return
+    if (!window.confirm('이 회의록을 삭제할까요? 되돌릴 수 없습니다.')) return
+    await deleteMeeting(meeting.id)
+    navigate('/')
+  }
+
   return (
     <div>
       <p><Link to="/">← 홈</Link></p>
@@ -176,9 +184,14 @@ export default function MeetingPage() {
             <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
           </>
         )}
+        <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} onClick={() => void removeMeeting()}>삭제</button>
       </div>
       {segments.length === 0 ? (
-        <p className="sub">전사된 내용이 없습니다. (실시간 자막 미지원 환경에서 녹음된 회의는 Plan 2의 파일 전사로 처리할 수 있습니다)</p>
+        <p className="sub">
+          {audioAvailable
+            ? '전사된 내용이 없습니다. [고품질 재전사] 버튼으로 지금 전사할 수 있어요.'
+            : '전사된 내용이 없습니다.'}
+        </p>
       ) : (
         <section className="card">
           {segments.map(s => {

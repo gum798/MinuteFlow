@@ -40,6 +40,7 @@ function renderPage(id: string) {
     <MemoryRouter initialEntries={[`/meeting/${id}`]}>
       <Routes>
         <Route path="/meeting/:id" element={<MeetingPage />} />
+        <Route path="/" element={<div>홈화면</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -139,4 +140,25 @@ test('오디오가 없으면 화자 구분 버튼이 없다', async () => {
   renderPage(m.id)
   await waitFor(() => screen.getByText('첫 발언'))
   expect(screen.queryByRole('button', { name: /화자 구분/ })).not.toBeInTheDocument()
+})
+
+test('삭제를 확인하면 회의록이 지워지고 홈으로 이동한다', async () => {
+  const m = await seed()
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: '삭제' }))
+  await userEvent.click(screen.getByRole('button', { name: '삭제' }))
+  await waitFor(() => expect(screen.getByText('홈화면')).toBeInTheDocument())
+  expect(await db.meetings.get(m.id)).toBeUndefined()
+  vi.restoreAllMocks()
+})
+
+test('삭제를 취소하면 회의록이 남는다', async () => {
+  const m = await seed()
+  vi.spyOn(window, 'confirm').mockReturnValue(false)
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: '삭제' }))
+  await userEvent.click(screen.getByRole('button', { name: '삭제' }))
+  expect(await db.meetings.get(m.id)).toBeDefined()
+  vi.restoreAllMocks()
 })
