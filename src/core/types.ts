@@ -7,6 +7,7 @@ export interface Meeting {
   durationSec: number
   status: 'recording' | 'done'
   language: string
+  speakerNames?: Record<string, string>
 }
 
 export interface AudioChunk {
@@ -26,6 +27,7 @@ export interface TranscriptSegment {
   text: string
   source: SttSource
   isFinal: boolean
+  speaker?: string
 }
 
 export interface Summary {
