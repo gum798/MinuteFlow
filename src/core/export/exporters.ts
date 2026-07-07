@@ -11,10 +11,17 @@ function meetingDate(meeting: Meeting): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+function displayName(meeting: Meeting, speaker: string): string {
+  return meeting.speakerNames?.[speaker] ?? speaker
+}
+
 export function toMarkdown(meeting: Meeting, segments: TranscriptSegment[]): string {
-  const lines = finalSegments(segments).map(
-    s => `- **[${formatTimestamp(s.startSec)}]** ${s.text}`,
-  )
+  const lines = finalSegments(segments).map(s => {
+    const ts = `- **[${formatTimestamp(s.startSec)}]**`
+    return s.speaker
+      ? `${ts} **${displayName(meeting, s.speaker)}** — ${s.text}`
+      : `${ts} ${s.text}`
+  })
   return [
     `# ${meeting.title}`,
     '',
@@ -29,9 +36,12 @@ export function toMarkdown(meeting: Meeting, segments: TranscriptSegment[]): str
 }
 
 export function toPlainText(meeting: Meeting, segments: TranscriptSegment[]): string {
-  const lines = finalSegments(segments).map(
-    s => `[${formatTimestamp(s.startSec)}] ${s.text}`,
-  )
+  const lines = finalSegments(segments).map(s => {
+    const ts = `[${formatTimestamp(s.startSec)}]`
+    return s.speaker
+      ? `${ts} ${displayName(meeting, s.speaker)}: ${s.text}`
+      : `${ts} ${s.text}`
+  })
   return [`${meeting.title} (${meetingDate(meeting)}, ${formatTimestamp(meeting.durationSec)})`, '', ...lines, ''].join('\n')
 }
 

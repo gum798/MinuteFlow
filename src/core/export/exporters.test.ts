@@ -26,6 +26,23 @@ test('toPlainText는 타임스탬프와 텍스트를 줄 단위로', () => {
   expect(txt).not.toContain('#')
 })
 
+test('화자가 있으면 이름과 함께 내보낸다', () => {
+  const m2 = { ...meeting, speakerNames: { SPK1: '김팀장' } }
+  const segs = [
+    { meetingId: 'm1', startSec: 0, endSec: 5, text: '시작', source: 'whisper', isFinal: true, speaker: 'SPK1' },
+    { meetingId: 'm1', startSec: 5, endSec: 9, text: '네', source: 'whisper', isFinal: true, speaker: 'SPK2' },
+  ] as TranscriptSegment[]
+  const md = toMarkdown(m2, segs)
+  expect(md).toContain('**김팀장** — 시작')
+  expect(md).toContain('**SPK2** — 네') // 이름 미지정은 라벨 그대로
+  const txt = toPlainText(m2, segs)
+  expect(txt).toContain('[00:00] 김팀장: 시작')
+})
+
+test('화자가 없으면 기존 형식 유지', () => {
+  expect(toMarkdown(meeting, segments)).toContain('**[00:00]** 시작하겠습니다')
+})
+
 test('exportFilename은 날짜 프리픽스와 안전한 파일명', () => {
   expect(exportFilename(meeting, 'md')).toBe('2026-07-06-주간회의.md')
   expect(exportFilename({ ...meeting, title: 'a/b:c' }, 'txt')).toBe('2026-07-06-a_b_c.txt')
