@@ -4,6 +4,7 @@ export type WhisperModelId =
 
 export interface AppSettings {
   groqApiKey: string
+  geminiApiKey: string
   whisperModel: WhisperModelId
   language: string
 }
@@ -12,6 +13,7 @@ const KEY = 'minuteflow.settings'
 
 const DEFAULTS: AppSettings = {
   groqApiKey: '',
+  geminiApiKey: '',
   whisperModel: 'onnx-community/whisper-large-v3-turbo',
   language: 'ko',
 }

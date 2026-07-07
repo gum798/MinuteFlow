@@ -5,7 +5,14 @@ beforeEach(() => localStorage.clear())
 test('저장된 값이 없으면 기본값', () => {
   expect(loadSettings()).toEqual({
     groqApiKey: '', whisperModel: 'onnx-community/whisper-large-v3-turbo', language: 'ko',
+    geminiApiKey: '',
   })
+})
+
+test('geminiApiKey 기본값과 저장', () => {
+  expect(loadSettings().geminiApiKey).toBe('')
+  saveSettings({ geminiApiKey: 'AIza_test' })
+  expect(loadSettings().geminiApiKey).toBe('AIza_test')
 })
 
 test('부분 저장이 병합된다', () => {
