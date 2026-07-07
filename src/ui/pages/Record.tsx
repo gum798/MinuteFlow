@@ -1,148 +1,38 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { createMeeting, appendAudioChunk, appendSegment, finishMeeting } from '../../core/store/meetings'
-import { pickMimeType } from '../../core/recorder/mime'
-import { ChunkedRecorder } from '../../core/recorder/chunkedRecorder'
-import { createWakeLockManager } from '../../core/recorder/wakeLock'
-import { getSpeechRecognitionCtor, WebSpeechEngine } from '../../core/stt/webSpeech'
+import { getSpeechRecognitionCtor } from '../../core/stt/webSpeech'
 import { formatTimestamp } from '../../core/format'
-
-type Phase = 'idle' | 'recording' | 'stopping'
+import {
+  subscribeRecording, getRecordingState, startRecording, stopRecording,
+} from '../../core/recorder/session'
 
 export default function Record() {
-  const [phase, setPhase] = useState<Phase>('idle')
-  const [error, setError] = useState<string | null>(null)
-  const [elapsed, setElapsed] = useState(0)
-  const [interim, setInterim] = useState('')
-  const [finals, setFinals] = useState<string[]>([])
+  const { phase, error, elapsedSec, interim, finals } =
+    useSyncExternalStore(subscribeRecording, getRecordingState)
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const autoStartedRef = useRef(false)
 
+  // 미지원 안내는 세션이 아니라 UI에서 판단 (세션은 ctor 없으면 엔진 없이 진행)
   const sttCtor = getSpeechRecognitionCtor()
-
-  const session = useRef<{
-    meetingId: string
-    recorder: ChunkedRecorder
-    engine: WebSpeechEngine | null
-    wakeLock: ReturnType<typeof createWakeLockManager>
-    stream: MediaStream
-    startedAt: number
-    lastFinalEnd: number
-    timer: ReturnType<typeof setInterval>
-    pendingWrites: Promise<void>[]
-  } | null>(null)
-
-  useEffect(() => () => { void cleanup() }, [])
 
   useEffect(() => {
     // autostart=1로 진입하면 마운트 시 한 번 자동으로 녹음을 시작한다.
-    // ref 가드로 StrictMode dev 이중 마운트에서 회의가 2개 생기는 것을 방지한다.
-    if (searchParams.get('autostart') === '1' && !autoStartedRef.current) {
+    // ref 가드로 StrictMode dev 이중 마운트를 막고, 이미 녹음 중이면 시작하지 않는다.
+    if (
+      searchParams.get('autostart') === '1' &&
+      !autoStartedRef.current &&
+      getRecordingState().phase === 'idle'
+    ) {
       autoStartedRef.current = true
-      void start()
+      void startRecording()
     }
-    // eslint 규칙 없음 — deps는 [] (마운트 1회, ref 가드가 StrictMode 이중 실행 방지)
+    // deps []: 마운트 1회 (ref 가드가 StrictMode 이중 실행 방지)
   }, [])
 
-  async function cleanup() {
-    const s = session.current
-    if (!s) return
-    session.current = null
-    clearInterval(s.timer)
-    // 스펙 §6 종료 순서: recorder.stop() → engine.stop() → wakeLock.disable()
-    await s.recorder.stop().catch(() => {})
-    s.engine?.stop()
-    await s.wakeLock.disable().catch(() => {})
-    s.stream.getTracks().forEach(t => t.stop())
-  }
-
-  async function start() {
-    setError(null)
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    } catch {
-      setError('마이크를 사용할 수 없습니다. 브라우저 권한을 확인해주세요.')
-      return
-    }
-
-    // getUserMedia 성공 이후 어디서 실패하든 스트림/부분 리소스를 반드시 정리한다.
-    let timer: ReturnType<typeof setInterval> | undefined
-    let wakeLock: ReturnType<typeof createWakeLockManager> | undefined
-    try {
-      const meeting = await createMeeting()
-      const mimeType = pickMimeType()
-      const pendingWrites: Promise<void>[] = []
-      const recorder = new ChunkedRecorder(stream, {
-        onChunk: (blob, seq) => {
-          pendingWrites.push(appendAudioChunk(meeting.id, seq, blob, mimeType ?? blob.type).catch(() => {}))
-        },
-        onStallRestart: () => setError('녹음이 잠시 끊겨 자동으로 재시작했습니다.'),
-        onError: () => setError('녹음 장치 오류가 발생했습니다. 지금까지의 녹음은 저장되어 있습니다.'),
-      }, { mimeType })
-
-      const startedAt = Date.now()
-      const elapsedSec = () => (Date.now() - startedAt) / 1000
-
-      let engine: WebSpeechEngine | null = null
-      if (sttCtor) {
-        engine = new WebSpeechEngine(sttCtor, meeting.language, {
-          onInterim: setInterim,
-          onFinal: text => {
-            const s = session.current
-            if (!s) return
-            const end = elapsedSec()
-            s.pendingWrites.push(appendSegment({
-              meetingId: s.meetingId, startSec: s.lastFinalEnd, endSec: end,
-              text, source: 'webspeech', isFinal: true,
-            }).catch(() => {}))
-            s.lastFinalEnd = end
-            setFinals(prev => [...prev, text])
-          },
-          onStatus: () => {},
-        })
-      }
-
-      wakeLock = createWakeLockManager()
-      timer = setInterval(() => setElapsed(elapsedSec()), 1000)
-      session.current = {
-        meetingId: meeting.id, recorder, engine, wakeLock, stream,
-        startedAt, lastFinalEnd: 0, timer, pendingWrites,
-      }
-      recorder.start()
-      engine?.start()
-      await wakeLock.enable()
-      setPhase('recording')
-    } catch {
-      if (session.current) {
-        // 세션이 이미 구성된 뒤 실패 → 레코더/엔진/워크락/스트림 전부 정리
-        await cleanup()
-      } else {
-        // 세션 구성 이전 실패 → 부분 생성된 리소스 수동 정리
-        if (timer) clearInterval(timer)
-        if (wakeLock) await wakeLock.disable().catch(() => {})
-        stream.getTracks().forEach(t => t.stop())
-      }
-      setError('녹음을 시작하지 못했습니다. 다시 시도해주세요.')
-    }
-  }
-
-  async function stop() {
-    const s = session.current
-    if (!s) return
-    setPhase('stopping')
-    const durationSec = Math.round((Date.now() - s.startedAt) / 1000)
-    await cleanup()
-    // flush 청크/세그먼트 DB 쓰기가 끝난 뒤 회의를 마감한다.
-    await Promise.allSettled(s.pendingWrites)
-    try {
-      await finishMeeting(s.meetingId, durationSec)
-      navigate(`/meeting/${s.meetingId}`)
-    } catch {
-      setError('회의를 마치지 못했습니다. 홈의 복구 배너에서 이어서 저장할 수 있습니다.')
-      setPhase('idle')
-    }
+  async function onStop() {
+    const id = await stopRecording()
+    if (id) navigate(`/meeting/${id}`)
   }
 
   return (
@@ -152,7 +42,7 @@ export default function Record() {
           <h1>녹음</h1>
           <p className="sub">
             {phase === 'recording'
-              ? `⏺ 녹음 중 · ${formatTimestamp(elapsed)}`
+              ? `⏺ 녹음 중 · ${formatTimestamp(elapsedSec)}`
               : phase === 'stopping'
                 ? '저장 중…'
                 : '실시간 자막과 함께 회의를 녹음합니다'}
@@ -160,10 +50,10 @@ export default function Record() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {phase === 'idle' && (
-            <button className="btn btn-primary" onClick={() => void start()}>🎙️ 녹음 시작</button>
+            <button className="btn btn-primary" onClick={() => void startRecording()}>🎙️ 녹음 시작</button>
           )}
           {phase === 'recording' && (
-            <button className="btn btn-primary" onClick={() => void stop()}>종료</button>
+            <button className="btn btn-primary" onClick={() => void onStop()}>종료</button>
           )}
         </div>
       </div>

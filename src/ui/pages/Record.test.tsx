@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import Record from './Record'
+import { __resetRecordingForTests } from '../../core/recorder/session'
 
 // createMeeting을 실패시켜 getUserMedia 이후 구간의 정리 경로를 검증한다.
 // 나머지 테스트는 start()가 여기까지 도달하지 않아 영향받지 않는다.
@@ -23,7 +24,11 @@ function renderRecord(entry = '/record') {
   )
 }
 
-afterEach(() => vi.unstubAllGlobals())
+beforeEach(() => __resetRecordingForTests())
+afterEach(() => {
+  __resetRecordingForTests()
+  vi.unstubAllGlobals()
+})
 
 test('마이크 권한 거부 시 에러 메시지를 보여준다', async () => {
   vi.stubGlobal('navigator', {

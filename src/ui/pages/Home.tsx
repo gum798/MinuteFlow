@@ -65,7 +65,8 @@ export default function Home() {
       {interrupted.map(m => (
         <div key={m.id} className="alert-warn alert" role="alert">
           복구할 녹음이 있습니다: {m.title}{' '}
-          <button className="btn btn-ghost btn-sm" onClick={() => recover(m.id)}>복구</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => recover(m.id)}>복구</button>{' '}
+          <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} onClick={() => void remove(m.id)}>삭제</button>
         </div>
       ))}
       {done.length === 0 ? (
