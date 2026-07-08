@@ -9,6 +9,7 @@ import { loadSettings } from '../../core/settings'
 import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
 import { summarizeWithGemini } from '../../core/summarize/gemini'
 import { decodeTo16kMono } from '../../core/audio/decode'
+import { getRecordingState } from '../../core/recorder/session'
 import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
 import { DiarizeEngine } from '../../core/diarize/diarizeLocal'
 import { speakerColor } from '../../core/diarize/speakerColors'
@@ -188,6 +189,10 @@ export default function MeetingPage() {
 
   async function removeMeeting() {
     if (!meeting) return
+    if (getRecordingState().meetingId === meeting.id) {
+      window.alert('녹음 중인 회의는 삭제할 수 없어요. 먼저 녹음을 종료해주세요.')
+      return
+    }
     const id = meeting.id
     await softDeleteMeeting(id)
     navigate('/')

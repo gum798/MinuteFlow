@@ -65,6 +65,35 @@ export function findInterruptedMeetings(): Promise<Meeting[]> {
   return db.meetings.where('status').equals('recording').filter(m => !m.deletedAt).toArray()
 }
 
+
+// 주인 없는 오디오 청크 복구 — 회의 행이 삭제됐지만 청크가 남은 경우(예: 녹음 중 삭제 사고) 회의를 되살린다.
+// 반환: 복구된 회의 수. 멱등(고아가 없으면 0).
+export async function recoverOrphanAudio(): Promise<number> {
+  const meetingIds = new Set(await db.meetings.toCollection().primaryKeys())
+  const orphanIds = new Set<string>()
+  await db.audioChunks.each(c => { if (!meetingIds.has(c.meetingId)) orphanIds.add(c.meetingId) })
+  let recovered = 0
+  for (const id of orphanIds) {
+    const chunks = await db.audioChunks.where('meetingId').equals(id).sortBy('seq')
+    if (chunks.length === 0) continue
+    const first = chunks[0]
+    const last = chunks[chunks.length - 1]
+    const durationSec = Math.max(CHUNK_SEC, Math.round((last.startedAt - first.startedAt) / 1000) + CHUNK_SEC)
+    const d = new Date(first.startedAt)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    await db.meetings.add({
+      id,
+      title: `복구된 녹음 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      createdAt: first.startedAt,
+      durationSec,
+      status: 'done',
+      language: 'ko-KR',
+    })
+    recovered++
+  }
+  return recovered
+}
+
 export async function finalizeInterrupted(id: string): Promise<Meeting | undefined> {
   const meeting = await db.meetings.get(id)
   if (!meeting) return undefined

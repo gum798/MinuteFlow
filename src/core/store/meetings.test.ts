@@ -2,7 +2,7 @@ import { db } from './db'
 import {
   createMeeting, appendAudioChunk, appendSegment, finishMeeting,
   updateMeetingTitle, listMeetings, getMeeting, getSegments,
-  getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting,
+  getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting, recoverOrphanAudio,
   createUploadMeeting, replaceSegments, applySpeakers, updateSpeakerNames,
   softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
   saveSummary, getSummaries,
@@ -216,4 +216,26 @@ test('getSummaries는 다른 회의를 섞지 않는다', async () => {
   await saveSummary(a.id, 'brief', 'A', 'x')
   await saveSummary(b.id, 'brief', 'B', 'x')
   expect((await getSummaries(a.id)).map(s => s.markdown)).toEqual(['A'])
+})
+
+test('recoverOrphanAudio는 회의 행 없는 청크를 회의로 되살린다', async () => {
+  const m = await createMeeting()
+  const enc = (t: string) => new TextEncoder().encode(t).buffer as ArrayBuffer
+  await db.audioChunks.add({ meetingId: m.id, seq: 0, data: enc('a'), mimeType: 'audio/webm', startedAt: 1000 })
+  await db.audioChunks.add({ meetingId: m.id, seq: 1, data: enc('b'), mimeType: 'audio/webm', startedAt: 11000 })
+  await db.meetings.delete(m.id) // 사고: 회의 행만 삭제 (청크 잔존)
+  const n = await recoverOrphanAudio()
+  expect(n).toBe(1)
+  const restored = await getMeeting(m.id)
+  expect(restored).toMatchObject({ status: 'done' })
+  expect(restored?.title).toMatch(/^복구된 녹음 /)
+  expect(restored?.durationSec).toBe(20) // (11000-1000)/1000 + 10
+  expect(await (await getMeetingAudio(m.id))!.text()).toBe('ab')
+})
+
+test('recoverOrphanAudio는 고아가 없으면 0이고 기존 회의를 건드리지 않는다', async () => {
+  const m = await createMeeting()
+  await appendAudioChunk(m.id, 0, new Blob(['x']), 'audio/webm')
+  expect(await recoverOrphanAudio()).toBe(0)
+  expect((await getMeeting(m.id))?.status).toBe('recording')
 })

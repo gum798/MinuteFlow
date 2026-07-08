@@ -4,7 +4,7 @@ import { subscribeRecording, getRecordingState } from '../../core/recorder/sessi
 import type { Meeting } from '../../core/types'
 import {
   listMeetings, findInterruptedMeetings, finalizeInterrupted,
-  softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
+  softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting, recoverOrphanAudio,
 } from '../../core/store/meetings'
 import { ensurePersistentStorage, getStorageBreakdown } from '../../core/store/storage'
 import { formatTimestamp } from '../../core/format'
@@ -29,6 +29,8 @@ export default function Home() {
     void ensurePersistentStorage()
     // 탭이 만료 전에 닫혀 남은 soft-deleted 잔여를 정리(단, 실행취소 대기 중인 최신 삭제는 보존)
     void purgeDeleted(UNDO_MS)
+    // 주인 잃은 오디오(회의 행만 삭제된 사고) 복구 후 목록 로드
+    void recoverOrphanAudio().then(n => { if (n > 0) void refresh() })
     void refresh()
     // 다른 화면(회의 상세)에서 실행취소로 복구되면 목록을 다시 로드
     const onRefresh = () => { void refresh() }
@@ -71,7 +73,7 @@ export default function Home() {
           )}
         </div>
       </div>
-      {interrupted.map(m => (
+      {interrupted.filter(m => m.id !== recording.meetingId).map(m => (
         <div key={m.id} className="alert-warn alert" role="alert">
           복구할 녹음이 있습니다: {m.title}{' '}
           <button className="btn btn-ghost btn-sm" onClick={() => recover(m.id)}>복구</button>{' '}
