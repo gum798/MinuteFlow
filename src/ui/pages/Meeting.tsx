@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
 import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, saveSummary, getSummaries } from '../../core/store/meetings'
 import { useUndoToast } from '../UndoToast'
+import { Markdown } from '../Markdown'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
@@ -285,7 +286,7 @@ export default function MeetingPage() {
       {summaries.map(s => (
         <section key={s.id} className="card" style={{ marginBottom: 12 }}>
           <span className="badge badge-accent">{TEMPLATE_LABELS[s.template]}</span>
-          <div style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{s.markdown}</div>
+          <div className="md-body" style={{ marginTop: 8 }}><Markdown text={s.markdown} /></div>
         </section>
       ))}
       {segments.length === 0 ? (

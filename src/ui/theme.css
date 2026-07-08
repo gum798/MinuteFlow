@@ -282,3 +282,13 @@ details.advanced[open] > summary { margin-bottom: 12px; }
   box-shadow: 0 10px 30px rgba(15, 18, 34, 0.35);
   font-size: 13px; font-weight: 700;
 }
+
+/* AI 요약 마크다운 본문 — 카드 안 여백 체계 */
+.md-body { color: var(--text-body); }
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-body h2, .md-body h3, .md-body h4 { margin: 12px 0 6px; line-height: 1.3; color: var(--text-strong); }
+.md-body p { margin: 6px 0; line-height: 1.55; }
+.md-body ul { margin: 6px 0; padding-left: 18px; }
+.md-body li { margin: 4px 0; line-height: 1.5; }
+.md-hr { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0; }
