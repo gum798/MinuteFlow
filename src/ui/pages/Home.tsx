@@ -6,14 +6,14 @@ import {
   listMeetings, findInterruptedMeetings, finalizeInterrupted,
   softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
 } from '../../core/store/meetings'
-import { ensurePersistentStorage, getStorageUsage } from '../../core/store/storage'
+import { ensurePersistentStorage, getStorageBreakdown } from '../../core/store/storage'
 import { formatTimestamp } from '../../core/format'
 import { useUndoToast, UNDO_MS } from '../UndoToast'
 
 export default function Home() {
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [interrupted, setInterrupted] = useState<Meeting[]>([])
-  const [usage, setUsage] = useState<{ usage: number; quota: number } | null>(null)
+  const [usage, setUsage] = useState<{ usage: number; quota: number } | null>(null) // usage = 실측(회의+모델캐시), 설정 화면과 동일 기준
   const navigate = useNavigate()
   const showUndoToast = useUndoToast()
   const recording = useSyncExternalStore(subscribeRecording, getRecordingState)
@@ -21,7 +21,8 @@ export default function Home() {
   const refresh = useCallback(async () => {
     setMeetings(await listMeetings())
     setInterrupted(await findInterruptedMeetings())
-    setUsage(await getStorageUsage())
+    const b = await getStorageBreakdown()
+    setUsage(b ? { usage: b.totalUsage, quota: b.quota } : null)
   }, [])
 
   useEffect(() => {
