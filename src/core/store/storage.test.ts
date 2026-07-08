@@ -1,4 +1,4 @@
-import { ensurePersistentStorage, getStorageUsage, getStorageBreakdown, clearModelCaches } from './storage'
+import { ensurePersistentStorage, getStorageUsage, getStorageBreakdown, getModelCacheBytes, clearModelCaches } from './storage'
 import { db } from './db'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -34,26 +34,35 @@ test('estimate 미지원이면 null', async () => {
   expect(await getStorageUsage()).toBeNull()
 })
 
-test('getStorageBreakdown은 회의 데이터와 캐시를 분리한다', async () => {
+test('getStorageBreakdown은 회의 데이터와 캐시 실측을 분리한다', async () => {
   await db.audioChunks.clear()
   await db.audioChunks.add({ meetingId: 'a', seq: 0, data: new Uint8Array(100).buffer, mimeType: 'audio/webm', startedAt: 0 })
   await db.audioChunks.add({ meetingId: 'a', seq: 1, data: new Uint8Array(200).buffer, mimeType: 'audio/webm', startedAt: 0 })
-  stubStorage({ estimate: async () => ({ usage: 1000, quota: 5000 }) })
+  stubStorage({ estimate: async () => ({ usage: 999999, quota: 5000 }) })
+  const fakeRes = { headers: { get: (h: string) => (h === 'content-length' ? '700' : null) } }
+  vi.stubGlobal('caches', {
+    keys: async () => ['transformers-cache', 'workbox-precache-v2-x'],
+    open: async () => ({ keys: async () => [{}], match: async () => fakeRes }),
+  })
+  // totalUsage는 estimate가 아니라 실측 합 (estimate는 삭제 직후 stale — Chromium 실측으로 확인)
   expect(await getStorageBreakdown()).toEqual({
     totalUsage: 1000, quota: 5000, meetingBytes: 300, cacheBytes: 700,
   })
 })
 
-test('getStorageBreakdown의 cacheBytes는 음수면 0', async () => {
-  await db.audioChunks.clear()
-  await db.audioChunks.add({ meetingId: 'a', seq: 0, data: new Uint8Array(500).buffer, mimeType: 'audio/webm', startedAt: 0 })
-  stubStorage({ estimate: async () => ({ usage: 100, quota: 5000 }) })
-  expect(await getStorageBreakdown()).toMatchObject({ meetingBytes: 500, cacheBytes: 0 })
+test('getModelCacheBytes는 content-length 없으면 blob 크기로 폴백', async () => {
+  const fakeRes = { headers: { get: () => null }, blob: async () => ({ size: 42 }) }
+  vi.stubGlobal('caches', {
+    keys: async () => ['onnx-wasm'],
+    open: async () => ({ keys: async () => [{}, {}], match: async () => fakeRes }),
+  })
+  expect(await getModelCacheBytes()).toBe(84)
 })
 
-test('getStorageBreakdown은 estimate 미지원이면 null', async () => {
+test('getStorageBreakdown은 estimate 미지원이어도 실측으로 동작한다 (quota 0)', async () => {
+  await db.audioChunks.clear()
   vi.stubGlobal('navigator', { ...navigator, storage: undefined })
-  expect(await getStorageBreakdown()).toBeNull()
+  expect(await getStorageBreakdown()).toMatchObject({ quota: 0, meetingBytes: 0, cacheBytes: 0 })
 })
 
 test('clearModelCaches는 workbox 캐시는 남기고 나머지만 지운다', async () => {
