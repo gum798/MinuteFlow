@@ -1,4 +1,5 @@
 import { AutoProcessor, AutoModelForAudioFrameClassification, AutoModel } from '@huggingface/transformers'
+import { buildEmbeddingLoadPlan } from '../stt/loadPlan'
 import { sliceWindows, offsetRegions, filterEmbeddable, type RawRegion } from './windows'
 import { clusterEmbeddings, labelClusters } from './cluster'
 import type { SpeakerRegion } from './assign'
@@ -31,7 +32,23 @@ self.onmessage = async (ev: MessageEvent<{ type: 'diarize'; audio: Float32Array 
       self.postMessage({ status: 'info', message: '화자 분석 모델 준비 중…' })
       const segModel = (await AutoModelForAudioFrameClassification.from_pretrained(SEG_MODEL, { dtype: 'q8', progress_callback: progress })) as unknown as SegModel
       const segProc = (await AutoProcessor.from_pretrained(SEG_MODEL)) as unknown as SegProcessor
-      const embModel = (await AutoModel.from_pretrained(EMB_MODEL, { dtype: 'fp16', progress_callback: progress })) as unknown as EmbModel
+      // WeSpeaker 임베딩 모델도 fp16 세션 실패 시 q8로 폴백(호환 사다리).
+      const embPlan = buildEmbeddingLoadPlan()
+      let embModel: EmbModel | null = null
+      let lastEmbError: unknown = null
+      for (let i = 0; i < embPlan.length; i++) {
+        try {
+          embModel = (await AutoModel.from_pretrained(EMB_MODEL, {
+            dtype: embPlan[i].dtype,
+            progress_callback: progress,
+          } as unknown as Parameters<typeof AutoModel.from_pretrained>[1])) as unknown as EmbModel
+          break
+        } catch (e) {
+          lastEmbError = e
+          if (i < embPlan.length - 1) self.postMessage({ status: 'info', message: '호환 모드로 재시도 중…' })
+        }
+      }
+      if (!embModel) throw lastEmbError instanceof Error ? lastEmbError : new Error(String(lastEmbError))
       const embProc = (await AutoProcessor.from_pretrained(EMB_MODEL)) as unknown as EmbProcessor
       models = { segModel, segProc, embModel, embProc }
     }
