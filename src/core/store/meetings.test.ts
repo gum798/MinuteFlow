@@ -3,7 +3,7 @@ import {
   createMeeting, appendAudioChunk, appendSegment, finishMeeting,
   updateMeetingTitle, listMeetings, getMeeting, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting, recoverOrphanAudio,
-  createUploadMeeting, replaceSegments, applySpeakers, updateSpeakerNames,
+  createUploadMeeting, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames,
   softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
   saveSummary, getSummaries,
 } from './meetings'
@@ -97,6 +97,22 @@ test('createUploadMeeting은 done 상태로 원본 오디오와 함께 생성된
   const audio = await getMeetingAudio(m.id)
   expect(await audio!.text()).toBe('aud')
   expect(audio!.type).toBe('audio/mp4')
+})
+
+test('replaceAudio는 기존 청크를 전부 지우고 단일 청크로 교체한다', async () => {
+  const m = await createMeeting()
+  await appendAudioChunk(m.id, 0, new Blob(['AA']), 'audio/webm')
+  await appendAudioChunk(m.id, 1, new Blob(['BB']), 'audio/webm')
+  await appendAudioChunk(m.id, 2, new Blob(['CC']), 'audio/webm')
+
+  await replaceAudio(m.id, new Blob(['REPAIRED'], { type: 'audio/webm;codecs=opus' }))
+
+  const chunks = await db.audioChunks.where('meetingId').equals(m.id).sortBy('seq')
+  expect(chunks).toHaveLength(1)
+  expect(chunks[0].seq).toBe(0)
+  const audio = await getMeetingAudio(m.id)
+  expect(await audio!.text()).toBe('REPAIRED')
+  expect(audio!.type).toBe('audio/webm;codecs=opus')
 })
 
 test('replaceSegments는 기존 세그먼트를 전부 교체한다', async () => {

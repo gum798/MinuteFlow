@@ -120,6 +120,18 @@ export async function createUploadMeeting(
   return meeting
 }
 
+/**
+ * 회의의 오디오를 단일 청크로 교체한다(트랜잭션).
+ * 기존 audioChunks를 전부 지우고 seq 0 하나로 대체 — WebM 헤더 수선본 저장 등에 사용.
+ */
+export async function replaceAudio(meetingId: string, blob: Blob): Promise<void> {
+  const data = await blob.arrayBuffer()
+  await db.transaction('rw', [db.audioChunks], async () => {
+    await db.audioChunks.where('meetingId').equals(meetingId).delete()
+    await db.audioChunks.add({ meetingId, seq: 0, data, mimeType: blob.type, startedAt: Date.now() })
+  })
+}
+
 export async function replaceSegments(
   meetingId: string, segs: Omit<TranscriptSegment, 'id' | 'meetingId'>[],
 ): Promise<void> {

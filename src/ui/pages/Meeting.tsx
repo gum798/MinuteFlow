@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, saveSummary, getSummaries } from '../../core/store/meetings'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, saveSummary, getSummaries } from '../../core/store/meetings'
 import { useUndoToast } from '../UndoToast'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
@@ -9,12 +9,27 @@ import { loadSettings } from '../../core/settings'
 import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
 import { summarizeWithGemini } from '../../core/summarize/gemini'
 import { decodeTo16kMono } from '../../core/audio/decode'
+import { repairHeaderlessWebm } from '../../core/audio/webmRepair'
 import { getRecordingState } from '../../core/recorder/session'
 import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
 import { DiarizeEngine } from '../../core/diarize/diarizeLocal'
 import { speakerColor } from '../../core/diarize/speakerColors'
 import { transcribeSamplesWithGroq } from '../../core/stt/groq'
 import { GROQ_ENABLED } from '../../core/features'
+
+// 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
+// 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
+async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Promise<Float32Array> {
+  try {
+    return await decodeTo16kMono(await blob.arrayBuffer())
+  } catch (e) {
+    const repaired = await repairHeaderlessWebm(blob)
+    if (!repaired) throw e
+    const samples = await decodeTo16kMono(await repaired.arrayBuffer())
+    await replaceAudio(meetingId, repaired) // 수선본을 저장 — 조용히 성공
+    return samples
+  }
+}
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
@@ -112,7 +127,7 @@ export default function MeetingPage() {
     try {
       const blob = await getMeetingAudio(meeting.id)
       if (!blob) return
-      const samples = await decodeTo16kMono(await blob.arrayBuffer())
+      const samples = await decodeMeetingAudioWithRepair(meeting.id, blob)
       let segs
       let source: 'whisper' | 'groq'
       if (GROQ_ENABLED && settings.groqApiKey) {
@@ -158,7 +173,7 @@ export default function MeetingPage() {
     try {
       const blob = await getMeetingAudio(meeting.id)
       if (!blob) return
-      const samples = await decodeTo16kMono(await blob.arrayBuffer())
+      const samples = await decodeMeetingAudioWithRepair(meeting.id, blob)
       setDiarizing('화자 구분 중…')
       const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setDiarizing(p.message) })
       if (regions.length === 0) {
