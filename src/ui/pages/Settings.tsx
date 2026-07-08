@@ -2,23 +2,40 @@ import { useEffect, useState } from 'react'
 import { loadSettings, saveSettings, type WhisperModelId } from '../../core/settings'
 import { detectWebGPU } from '../../core/stt/whisperLocal'
 import { GROQ_ENABLED } from '../../core/features'
+import { getStorageBreakdown, clearModelCaches, type StorageBreakdown } from '../../core/store/storage'
 
 const MODELS: { id: WhisperModelId; label: string; desc: string }[] = [
   { id: 'onnx-community/whisper-large-v3-turbo', label: 'whisper-large-v3-turbo', desc: '고품질 · 다운로드 약 560MB · WebGPU 권장' },
   { id: 'onnx-community/whisper-base', label: 'whisper-base', desc: '경량 · 약 200MB · 저사양/WASM용' },
 ]
 
+// 1GB 이상은 GB 1자리, 그 미만은 MB 정수.
+function fmtBytes(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)}GB` : `${(bytes / 1e6).toFixed(0)}MB`
+}
+
 export default function Settings() {
   const [form, setForm] = useState(loadSettings)
   const [webgpu, setWebgpu] = useState<boolean | null>(null)
   const [toast, setToast] = useState(false)
+  const [storage, setStorage] = useState<StorageBreakdown | null>(null)
+  const [cacheToast, setCacheToast] = useState(false)
 
   useEffect(() => { void detectWebGPU().then(setWebgpu) }, [])
+  useEffect(() => { void getStorageBreakdown().then(setStorage) }, [])
 
   function save() {
     saveSettings(form)
     setToast(true)
     setTimeout(() => setToast(false), 2000)
+  }
+
+  async function clearCaches() {
+    if (!window.confirm('AI 모델 캐시를 비울까요? 회의록은 지워지지 않으며, 다음 전사 때 모델을 다시 내려받습니다.')) return
+    await clearModelCaches()
+    setStorage(await getStorageBreakdown())
+    setCacheToast(true)
+    setTimeout(() => setCacheToast(false), 2000)
   }
 
   return (
@@ -56,6 +73,26 @@ export default function Settings() {
           </div>
         </section>
       )}
+
+      <section className="card" style={{ marginTop: 22 }}>
+        <h2>저장 공간</h2>
+        {storage && (
+          <>
+            {storage.quota > 0 && (
+              <div className="progress" style={{ marginBottom: 6 }}>
+                <i style={{ width: `${Math.min(100, (storage.totalUsage / storage.quota) * 100)}%` }} />
+              </div>
+            )}
+            <p className="muted">
+              회의 데이터 {fmtBytes(storage.meetingBytes)} · AI 모델 캐시 {fmtBytes(storage.cacheBytes)}
+            </p>
+          </>
+        )}
+        <p style={{ marginTop: 10 }}>
+          <button className="btn btn-outline" onClick={() => void clearCaches()}>AI 모델 캐시 비우기</button>
+        </p>
+        <p className="hint">회의 데이터는 홈에서 회의록을 삭제하면 줄어들어요.</p>
+      </section>
 
       <details className="advanced" style={{ marginTop: 16 }}>
         <summary>고급 설정 (전사 모델·언어)</summary>
@@ -97,6 +134,7 @@ export default function Settings() {
         <button className="btn btn-primary" onClick={save}>저장</button>
       </p>
       {toast && <div className="toast">저장되었습니다</div>}
+      {cacheToast && <div className="toast">캐시를 비웠어요</div>}
     </div>
   )
 }

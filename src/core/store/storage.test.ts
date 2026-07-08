@@ -1,4 +1,5 @@
-import { ensurePersistentStorage, getStorageUsage } from './storage'
+import { ensurePersistentStorage, getStorageUsage, getStorageBreakdown, clearModelCaches } from './storage'
+import { db } from './db'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -31,4 +32,44 @@ test('getStorageUsage는 estimate를 반환한다', async () => {
 test('estimate 미지원이면 null', async () => {
   vi.stubGlobal('navigator', { ...navigator, storage: undefined })
   expect(await getStorageUsage()).toBeNull()
+})
+
+test('getStorageBreakdown은 회의 데이터와 캐시를 분리한다', async () => {
+  await db.audioChunks.clear()
+  await db.audioChunks.add({ meetingId: 'a', seq: 0, data: new Uint8Array(100).buffer, mimeType: 'audio/webm', startedAt: 0 })
+  await db.audioChunks.add({ meetingId: 'a', seq: 1, data: new Uint8Array(200).buffer, mimeType: 'audio/webm', startedAt: 0 })
+  stubStorage({ estimate: async () => ({ usage: 1000, quota: 5000 }) })
+  expect(await getStorageBreakdown()).toEqual({
+    totalUsage: 1000, quota: 5000, meetingBytes: 300, cacheBytes: 700,
+  })
+})
+
+test('getStorageBreakdown의 cacheBytes는 음수면 0', async () => {
+  await db.audioChunks.clear()
+  await db.audioChunks.add({ meetingId: 'a', seq: 0, data: new Uint8Array(500).buffer, mimeType: 'audio/webm', startedAt: 0 })
+  stubStorage({ estimate: async () => ({ usage: 100, quota: 5000 }) })
+  expect(await getStorageBreakdown()).toMatchObject({ meetingBytes: 500, cacheBytes: 0 })
+})
+
+test('getStorageBreakdown은 estimate 미지원이면 null', async () => {
+  vi.stubGlobal('navigator', { ...navigator, storage: undefined })
+  expect(await getStorageBreakdown()).toBeNull()
+})
+
+test('clearModelCaches는 workbox 캐시는 남기고 나머지만 지운다', async () => {
+  const del = vi.fn(async () => true)
+  vi.stubGlobal('caches', {
+    keys: async () => ['transformers-cache', 'onnx-wasm', 'workbox-precache-v2-app', 'workbox-runtime'],
+    delete: del,
+  })
+  expect(await clearModelCaches()).toBe(2)
+  expect(del).toHaveBeenCalledWith('transformers-cache')
+  expect(del).toHaveBeenCalledWith('onnx-wasm')
+  expect(del).not.toHaveBeenCalledWith('workbox-precache-v2-app')
+  expect(del).not.toHaveBeenCalledWith('workbox-runtime')
+})
+
+test('clearModelCaches는 caches 미지원이면 0', async () => {
+  vi.stubGlobal('caches', undefined)
+  expect(await clearModelCaches()).toBe(0)
 })

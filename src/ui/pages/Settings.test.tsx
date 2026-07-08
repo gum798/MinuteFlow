@@ -7,7 +7,15 @@ import Settings from './Settings'
 // 숨겨진 Groq 키 UI의 회귀 방지를 위해 플래그를 켠 상태로 계속 검증한다.
 vi.mock('../../core/features', () => ({ GROQ_ENABLED: true }))
 
-beforeEach(() => localStorage.clear())
+vi.mock('../../core/store/storage', () => ({
+  getStorageBreakdown: vi.fn(async () => ({
+    totalUsage: 1_400_000_000, quota: 5_000_000_000, meetingBytes: 30_000_000, cacheBytes: 1_370_000_000,
+  })),
+  clearModelCaches: vi.fn(async () => 3),
+}))
+import { getStorageBreakdown, clearModelCaches } from '../../core/store/storage'
+
+beforeEach(() => { localStorage.clear(); vi.clearAllMocks() })
 
 function renderPage() {
   return render(<MemoryRouter><Settings /></MemoryRouter>)
@@ -43,4 +51,22 @@ test('모델 선택이 저장된다', async () => {
 test('WebGPU 미지원이면 안내 배지', async () => {
   renderPage() // jsdom에는 navigator.gpu 없음
   await waitFor(() => expect(screen.getByText(/WebGPU 미지원/)).toBeInTheDocument())
+})
+
+test('저장 공간 카드가 항목별 사용량을 보여준다', async () => {
+  renderPage()
+  await waitFor(() => expect(getStorageBreakdown).toHaveBeenCalled())
+  expect(screen.getByText(/저장 공간/)).toBeInTheDocument()
+  // 회의 데이터 30MB · AI 모델 캐시 1.4GB (1GB 이상은 GB 1자리)
+  expect(screen.getByText(/회의 데이터 30MB · AI 모델 캐시 1\.4GB/)).toBeInTheDocument()
+})
+
+test('AI 모델 캐시 비우기를 누르면 캐시를 지우고 다시 로드한다', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPage()
+  await waitFor(() => expect(getStorageBreakdown).toHaveBeenCalledTimes(1))
+  await userEvent.click(screen.getByRole('button', { name: /AI 모델 캐시 비우기/ }))
+  await waitFor(() => expect(clearModelCaches).toHaveBeenCalled())
+  expect(getStorageBreakdown).toHaveBeenCalledTimes(2)
+  expect(await screen.findByText(/캐시를 비웠어요/)).toBeInTheDocument()
 })
