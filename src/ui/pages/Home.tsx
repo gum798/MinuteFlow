@@ -87,9 +87,14 @@ export default function Home() {
       ) : (
         <div className="card-grid">
           {done.map(m => (
-            <div key={m.id} className="card hoverable">
+            <div
+              key={m.id}
+              className="card hoverable"
+              style={{ cursor: 'pointer' }}
+              onClick={() => navigate(`/meeting/${m.id}`)}
+            >
               <div className="row" style={{ marginBottom: 8 }}>
-                <Link to={`/meeting/${m.id}`}>{m.title}</Link>
+                <Link to={`/meeting/${m.id}`} onClick={e => e.stopPropagation()}>{m.title}</Link>
                 {(() => {
                   const job = jobs.find(j => j.meetingId === m.id)
                   return job
@@ -101,7 +106,7 @@ export default function Home() {
                 <span className="muted">
                   {new Date(m.createdAt).toLocaleDateString('ko-KR')} · {formatTimestamp(m.durationSec)}
                 </span>
-                <button className="btn btn-ghost btn-sm" onClick={() => remove(m.id)}>삭제</button>
+                <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); void remove(m.id) }}>삭제</button>
               </div>
             </div>
           ))}
