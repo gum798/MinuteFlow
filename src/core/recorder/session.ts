@@ -1,5 +1,5 @@
 import {
-  createMeeting, appendAudioChunk, appendSegment, finishMeeting, markGroupFirstPart,
+  createMeeting, appendAudioChunk, appendSegment, finishMeeting, markGroupFirstPart, deleteMeeting,
 } from '../store/meetings'
 import type { Meeting } from '../types'
 import { loadSettings } from '../settings'
@@ -55,8 +55,8 @@ interface Session {
   lastFinalEnd: number
   /** 연속 무음 틱 수. */
   silentTicks: number
-  /** 로테이션 진행 중 재진입 방지. */
-  rotating: boolean
+  /** 로테이션 진행 중이면 그 완료 promise, 아니면 null (stopRecording이 이걸 await해 경합을 해소). */
+  rotating: Promise<void> | null
   /** 생성된 모든 부의 회의 id(생성 순서, parts[0]=첫 부). */
   parts: string[]
   timer: ReturnType<typeof setInterval>
@@ -81,6 +81,8 @@ export function createLevelMeter(stream: MediaStream): LevelMeter {
       .AudioContext ??
     (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext!
   const ctx = new AudioCtor()
+  // suspended 상태면 RMS가 0으로 읽혀 가짜 무음 판정을 부른다 — 재개한다.
+  if (ctx.state === 'suspended') void ctx.resume().catch(() => {})
   const source = ctx.createMediaStreamSource(stream)
   const analyser = ctx.createAnalyser()
   analyser.fftSize = 2048
@@ -167,22 +169,48 @@ function onTick(): void {
   const target = s.splitMinutes * 60
   const shouldRotate =
     (partElapsedSec >= target && isSilent) || partElapsedSec >= target + HARD_CAP_EXTRA_SEC
-  if (shouldRotate) void rotatePart()
+  if (shouldRotate) rotatePart()
+}
+
+/**
+ * 로테이션을 시작한다(재진입/동시 실행 방지). onTick에서 호출.
+ * 진행 중인 로테이션 promise를 세션에 걸어두어 stopRecording이 이를 await로 조율한다.
+ */
+function rotatePart(): void {
+  const s = session
+  if (!s || s.rotating) return
+  const p = performRotation(s)
+  s.rotating = p
+  void p.finally(() => { if (s.rotating === p) s.rotating = null })
+}
+
+/** 새 레코더를 만들어 start한다. 시작 실패 시 1회 재시도, 최종 실패면 null. */
+function startNewRecorder(s: Session, meetingId: string, writes: Promise<void>[]): ChunkedRecorder | null {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const rec = new ChunkedRecorder(s.stream, {
+      onChunk: (blob, seq) => {
+        writes.push(appendAudioChunk(meetingId, seq, blob, s.mimeType ?? blob.type).catch(() => {}))
+      },
+      onStallRestart: () => set({ error: '녹음이 잠시 끊겨 자동으로 재시작했습니다.' }),
+      onError: () => set({ error: '녹음 장치 오류가 발생했습니다. 지금까지의 녹음은 저장되어 있습니다.' }),
+    }, { mimeType: s.mimeType })
+    try {
+      rec.start()
+      return rec
+    } catch { /* 다음 시도로 */ }
+  }
+  return null
 }
 
 /**
  * 현재 부를 마감하고 새 부로 이어 녹음한다. 마이크/자막 무중단이 목표.
- * 데이터 최우선: 새 부 회의 생성에 실패하면 로테이션을 취소하고 현재 부를 그대로 유지한다.
+ * 데이터 최우선: 각 실패 지점에서 현재 부 녹음을 지키도록 설계.
  */
-async function rotatePart(): Promise<void> {
-  const s = session
-  if (!s || s.rotating) return
-  s.rotating = true
-
+async function performRotation(s: Session): Promise<void> {
   const completedId = s.meetingId
   const oldRecorder = s.recorder
   const oldWrites = s.pendingWrites
-  const partDuration = Math.max(0, Math.round((Date.now() - s.partStartedAt) / 1000))
+  const oldPartStartedAt = s.partStartedAt
   const nextIndex = s.partIndex + 1
   const groupId = s.groupId ?? s.firstMeetingId
 
@@ -193,7 +221,13 @@ async function rotatePart(): Promise<void> {
       groupId, partIndex: nextIndex, titleSuffix: ` (${nextIndex}부)`,
     })
   } catch {
-    s.rotating = false
+    s.silentTicks = 0 // 매 틱 재시도 폭주 방지 — 다음 무음 홀드까지 미룬다.
+    return
+  }
+
+  // 로테이션 중 세션이 해제/교체됐다면(이탈·종료) 방금 만든 빈 부를 정리하고 중단한다.
+  if (session !== s) {
+    await deleteMeeting(next.id).catch(() => {})
     return
   }
 
@@ -203,25 +237,21 @@ async function rotatePart(): Promise<void> {
     await markGroupFirstPart(s.firstMeetingId, groupId, s.firstPartBaseTitle, ' (1부)').catch(() => {})
   }
 
-  // (c) 현재 레코더 정지·flush → 쓰기 완료 → 현재 부 마감(실패해도 복구 배너가 안전망).
-  await oldRecorder.stop().catch(() => {})
-  await Promise.allSettled(oldWrites)
-  await finishMeeting(completedId, partDuration).catch(() => {})
-
-  // 로테이션 중 stopRecording이 끼어들어 세션이 해제/교체됐다면 여기서 멈춘다
-  // (죽은 스트림에 새 레코더를 붙이지 않는다 — 완료된 부는 이미 안전하게 저장됨).
-  if (session !== s) return
-
-  // (d) 같은 스트림·mimeType으로 새 레코더 시작 → 세션을 새 부로 전환.
+  // (c) 새 레코더를 이전 레코더보다 먼저 start — 경계 ~1초 중복 녹음(> 발화 유실).
+  //     각 레코더는 per-closure로 자기 부에만 쓰므로 중복은 안전하다.
   const newWrites: Promise<void>[] = []
-  const newRecorder = new ChunkedRecorder(s.stream, {
-    onChunk: (blob, seq) => {
-      newWrites.push(appendAudioChunk(next.id, seq, blob, s.mimeType ?? blob.type).catch(() => {}))
-    },
-    onStallRestart: () => set({ error: '녹음이 잠시 끊겨 자동으로 재시작했습니다.' }),
-    onError: () => set({ error: '녹음 장치 오류가 발생했습니다. 지금까지의 녹음은 저장되어 있습니다.' }),
-  }, { mimeType: s.mimeType })
+  const newRecorder = startNewRecorder(s, next.id, newWrites)
+  if (!newRecorder) {
+    // 새 레코더를 못 띄웠다. 이전 레코더는 계속 돌고 있어 현재 부 데이터 유실은 없다.
+    // 이 세션의 자동 분할을 끄고(스핀 방지) 사용자에게 종료를 권한다.
+    s.splitMinutes = 0
+    s.silentTicks = 0
+    set({ error: '녹음 장치 오류 — 녹음을 종료해주세요.' })
+    await deleteMeeting(next.id).catch(() => {})
+    return
+  }
 
+  // 세션을 새 부로 전환(자막·타이머 기준 갱신). WebSpeech 엔진은 그대로 두고 onFinal이 참조한다.
   s.meetingId = next.id
   s.recorder = newRecorder
   s.pendingWrites = newWrites
@@ -230,12 +260,14 @@ async function rotatePart(): Promise<void> {
   s.partIndex = nextIndex
   s.silentTicks = 0
   s.parts.push(next.id)
-  newRecorder.start()
-
-  // 새 부 자막으로 초기화. WebSpeech 엔진은 그대로 두고 onFinal이 세션의 현재 부를 참조한다.
   set({ meetingId: next.id, partIndex: nextIndex, interim: '', finals: [] })
+
+  // (e) 이전 레코더 정지·flush → 쓰기 완료 → 이전 부 마감 → 완료 이벤트(후처리 큐 트리거).
+  await oldRecorder.stop().catch(() => {})
+  await Promise.allSettled(oldWrites)
+  const partDuration = Math.max(0, Math.round((Date.now() - oldPartStartedAt) / 1000))
+  await finishMeeting(completedId, partDuration).catch(() => {})
   window.dispatchEvent(new CustomEvent('minuteflow:part-complete', { detail: { meetingId: completedId } }))
-  s.rotating = false
 }
 
 async function cleanup(): Promise<void> {
@@ -316,7 +348,7 @@ export async function startRecording(): Promise<void> {
       meetingId: meeting.id, firstMeetingId: meeting.id, firstPartBaseTitle: meeting.title,
       groupId: null, partIndex: 1, recorder, engine, wakeLock, stream, mimeType,
       language: meeting.language, levelMeter, splitMinutes: loadSettings().splitMinutes,
-      startedAt, partStartedAt: startedAt, lastFinalEnd: 0, silentTicks: 0, rotating: false,
+      startedAt, partStartedAt: startedAt, lastFinalEnd: 0, silentTicks: 0, rotating: null,
       parts: [meeting.id], timer, pendingWrites,
     }
     lastSessionParts = []
@@ -343,6 +375,9 @@ export async function stopRecording(): Promise<string | null> {
   const s = session
   if (!s) return null
   set({ phase: 'stopping' })
+  // 진행 중인 로테이션이 있으면 안전하게 끝나길 먼저 기다린다
+  // (유령 빈 부·이중 finishMeeting 방지). 로테이션이 부를 바꿨을 수 있어 이후 최신 상태를 읽는다.
+  if (s.rotating) await s.rotating
   // 마지막 부의 길이는 부 시작 기준으로 계산한다(부별 duration = 부 길이).
   const durationSec = Math.round((Date.now() - s.partStartedAt) / 1000)
   const lastMeetingId = s.meetingId
