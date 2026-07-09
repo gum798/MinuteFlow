@@ -4,6 +4,12 @@
 
 export type JobKind = 'retranscribe' | 'diarize' | 'summarize'
 
+export const JOB_LABELS: Record<JobKind, string> = {
+  retranscribe: '재전사 중',
+  diarize: '화자 구분 중',
+  summarize: '요약 중',
+}
+
 export interface MeetingJob {
   meetingId: string
   kind: JobKind

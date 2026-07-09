@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { subscribeRecording, getRecordingState } from '../../core/recorder/session'
+import { subscribeJobs, getJobs, JOB_LABELS } from '../../core/jobs'
 import type { Meeting } from '../../core/types'
 import {
   listMeetings, findInterruptedMeetings, finalizeInterrupted,
@@ -17,6 +18,7 @@ export default function Home() {
   const navigate = useNavigate()
   const showUndoToast = useUndoToast()
   const recording = useSyncExternalStore(subscribeRecording, getRecordingState)
+  const jobs = useSyncExternalStore(subscribeJobs, getJobs)
 
   const refresh = useCallback(async () => {
     setMeetings(await listMeetings())
@@ -88,7 +90,12 @@ export default function Home() {
             <div key={m.id} className="card hoverable">
               <div className="row" style={{ marginBottom: 8 }}>
                 <Link to={`/meeting/${m.id}`}>{m.title}</Link>
-                <span className="badge badge-ok">확정</span>
+                {(() => {
+                  const job = jobs.find(j => j.meetingId === m.id)
+                  return job
+                    ? <span className="badge badge-accent"><span className="dot" />{JOB_LABELS[job.kind]}</span>
+                    : <span className="badge badge-ok">확정</span>
+                })()}
               </div>
               <div className="row">
                 <span className="muted">
