@@ -7,6 +7,8 @@ export interface AppSettings {
   geminiApiKey: string
   whisperModel: WhisperModelId
   language: string
+  /** 녹음 종료 후 자동으로 재전사·화자 구분·AI 요약을 실행할지 (기본 켜짐). */
+  autoPipeline: boolean
 }
 
 const KEY = 'minuteflow.settings'
@@ -16,6 +18,7 @@ const DEFAULTS: AppSettings = {
   geminiApiKey: '',
   whisperModel: 'onnx-community/whisper-large-v3-turbo',
   language: 'ko',
+  autoPipeline: true,
 }
 
 export function loadSettings(): AppSettings {

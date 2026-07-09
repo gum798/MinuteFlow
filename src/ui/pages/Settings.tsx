@@ -94,6 +94,16 @@ export default function Settings() {
         <p className="hint">회의 데이터는 홈에서 회의록을 삭제하면 줄어들어요.</p>
       </section>
 
+      <section className="card" style={{ marginTop: 22 }}>
+        <h2>자동 처리</h2>
+        <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" id="auto-pipeline" checked={form.autoPipeline}
+            onChange={e => setForm({ ...form, autoPipeline: e.target.checked })} />
+          <label htmlFor="auto-pipeline">회의 종료 후 자동으로 재전사·화자 구분·AI 요약 실행</label>
+        </div>
+        <p className="hint" style={{ marginTop: 8 }}>AI 요약은 Gemini 키가 등록된 경우에만 실행돼요.</p>
+      </section>
+
       <details className="advanced" style={{ marginTop: 16 }}>
         <summary>고급 설정 (전사 모델·언어)</summary>
 

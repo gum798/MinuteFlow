@@ -5,6 +5,8 @@ import { formatTimestamp } from '../../core/format'
 import {
   subscribeRecording, getRecordingState, startRecording, stopRecording,
 } from '../../core/recorder/session'
+import { loadSettings } from '../../core/settings'
+import { runAutoPipeline } from '../../core/pipeline'
 
 export default function Record() {
   const { phase, error, elapsedSec, interim, finals } =
@@ -32,7 +34,11 @@ export default function Record() {
 
   async function onStop() {
     const id = await stopRecording()
-    if (id) navigate(`/meeting/${id}`)
+    if (!id) return
+    navigate(`/meeting/${id}`)
+    // 설정이 켜져 있으면 회의록 화면으로 이동한 직후 자동 처리를 fire-and-forget으로 시작한다.
+    // 진행 상황은 Meeting 화면의 잡 스토어 구독으로 자동 표시된다.
+    if (loadSettings().autoPipeline) void runAutoPipeline(id)
   }
 
   return (

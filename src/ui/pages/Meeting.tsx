@@ -1,37 +1,18 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, saveSummary, getSummaries } from '../../core/store/meetings'
-import { subscribeJobs, getJobs, runJob, type JobDoneDetail } from '../../core/jobs'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, getSummaries } from '../../core/store/meetings'
+import { subscribeJobs, getJobs, type JobDoneDetail } from '../../core/jobs'
 import { useUndoToast } from '../UndoToast'
 import { Markdown } from '../Markdown'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
-import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, withDateSuffix, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
-import { summarizeWithGemini } from '../../core/summarize/gemini'
-import { decodeTo16kMono } from '../../core/audio/decode'
-import { repairHeaderlessWebm } from '../../core/audio/webmRepair'
+import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
+import { retranscribeMeeting, diarizeMeeting, summarizeMeeting } from '../../core/meetingActions'
 import { getRecordingState } from '../../core/recorder/session'
-import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
-import { DiarizeEngine } from '../../core/diarize/diarizeLocal'
 import { speakerColor } from '../../core/diarize/speakerColors'
-import { transcribeSamplesWithGroq } from '../../core/stt/groq'
 import { GROQ_ENABLED, DOCX_ENABLED } from '../../core/features'
-
-// 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
-// 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
-async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Promise<Float32Array> {
-  try {
-    return await decodeTo16kMono(await blob.arrayBuffer())
-  } catch (e) {
-    const repaired = await repairHeaderlessWebm(blob)
-    if (!repaired) throw e
-    const samples = await decodeTo16kMono(await repaired.arrayBuffer())
-    await replaceAudio(meetingId, repaired) // 수선본을 저장 — 조용히 성공
-    return samples
-  }
-}
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
@@ -111,25 +92,10 @@ export default function MeetingPage() {
 
   async function runSummarize() {
     if (!meeting) return
-    const m = meeting
     // 실패 시 던진 예외는 runJob이 job-done(detail.error)로 넘겨 마운트된 화면에서만 알린다.
     // 성공 후 데이터 재로드(setSummaries/setMeeting/setTitle)는 job-done 리스너가 담당.
-    await runJob(m.id, 'summarize', async setStatus => {
-      setStatus('요약 중…')
-      // 제목이 자동 생성 기본값이면 AI에게 내용 기반 제목을 함께 요청한다(사용자 지정 제목은 불변).
-      const wantTitle = isDefaultTitle(m.title)
-      const prompt = buildSummaryPrompt(template, m, segments, { suggestTitle: wantTitle })
-      const raw = await summarizeWithGemini(prompt, loadSettings().geminiApiKey)
-      const { title: aiTitle, body } = wantTitle ? extractSuggestedTitle(raw) : { title: null, body: raw }
-      await saveSummary(m.id, template, body, 'gemini-3.5-flash')
-      // AI가 형식을 지켜 제목을 냈을 때만 반영 — 요약 도중 사용자가 제목을 고쳤으면(기본값 아님) 건드리지 않음.
-      if (wantTitle && aiTitle) {
-        const fresh = await getMeeting(m.id)
-        if (fresh && isDefaultTitle(fresh.title)) {
-          await updateMeetingTitle(m.id, withDateSuffix(aiTitle, m.createdAt))
-        }
-      }
-    })
+    // 버튼은 키·세그먼트가 있을 때만 노출되므로 'no-key'/'no-segments'는 실질적으로 발생하지 않는다.
+    await summarizeMeeting(meeting.id, template)
   }
 
   async function copyPrompt() {
@@ -153,70 +119,17 @@ export default function MeetingPage() {
 
   async function retranscribe() {
     if (!meeting || !window.confirm('기존 전사를 새 결과로 교체할까요?')) return
-    const settings = loadSettings()
-    const mid = meeting.id
     // 성공 시 세그먼트·이름맵 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
-    await runJob(mid, 'retranscribe', async setStatus => {
-      setStatus('오디오 준비 중…')
-      const blob = await getMeetingAudio(mid)
-      if (!blob) return
-      const samples = await decodeMeetingAudioWithRepair(mid, blob)
-      let segs
-      let source: 'whisper' | 'groq'
-      if (GROQ_ENABLED && settings.groqApiKey) {
-        source = 'groq'
-        setStatus('Groq로 전사 중…')
-        segs = await transcribeSamplesWithGroq(samples, {
-          apiKey: settings.groqApiKey, language: settings.language,
-          onPart: (d, t) => setStatus(`Groq 분할 전사 중 (${d}/${t})`),
-        })
-      } else {
-        source = 'whisper'
-        const webgpu = await detectWebGPU()
-        const eng = new WhisperLocalEngine()
-        try {
-          setStatus('브라우저 Whisper로 전사 중… (모델 다운로드가 필요할 수 있어요)')
-          segs = await eng.transcribe(samples, {
-            model: webgpu ? settings.whisperModel : 'onnx-community/whisper-base',
-            device: webgpu ? 'webgpu' : 'wasm',
-            language: settings.language,
-          }, p => { if (p.kind === 'status') setStatus(p.message) })
-        } finally { eng.dispose() }
-      }
-      if (segs.length === 0) {
-        // 비-에러 안내 — 결과를 바꾸지 않으므로 여기서 직접 알린다.
-        window.alert('전사 결과가 비어 있어 기존 내용을 유지합니다.')
-        return
-      }
-      await replaceSegments(mid, segs.map(s => ({ ...s, source, isFinal: true })))
-      // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름이 다른 화자에 잘못 붙는 것 방지.
-      await updateSpeakerNames(mid, {})
-    })
+    // 빈 결과 안내는 결과를 바꾸지 않으므로 반환값으로 판단해 여기서 직접 알린다.
+    const result = await retranscribeMeeting(meeting.id)
+    if (result === 'empty') window.alert('전사 결과가 비어 있어 기존 내용을 유지합니다.')
   }
 
   async function diarize() {
     if (!meeting) return
-    const mid = meeting.id
     // 성공 시 세그먼트·회의 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
-    await runJob(mid, 'diarize', async setStatus => {
-      setStatus('오디오 준비 중…')
-      const engine = new DiarizeEngine()
-      try {
-        const blob = await getMeetingAudio(mid)
-        if (!blob) return
-        const samples = await decodeMeetingAudioWithRepair(mid, blob)
-        setStatus('화자 구분 중…')
-        const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setStatus(p.message) })
-        if (regions.length === 0) {
-          // 비-에러 안내 — 결과를 바꾸지 않으므로 여기서 직접 알린다.
-          window.alert('화자를 구분할 수 없었습니다.')
-          return
-        }
-        await applySpeakers(mid, regions)
-      } finally {
-        engine.dispose()
-      }
-    })
+    const result = await diarizeMeeting(meeting.id)
+    if (result === 'empty') window.alert('화자를 구분할 수 없었습니다.')
   }
 
   async function renameSpeaker(speaker: string) {

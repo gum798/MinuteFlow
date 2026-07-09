@@ -61,6 +61,15 @@ test('저장 공간 카드가 항목별 사용량을 보여준다', async () => 
   expect(screen.getByText(/회의 데이터 30MB · AI 모델 캐시 1\.4GB/)).toBeInTheDocument()
 })
 
+test('자동 처리 기본값은 체크됨이고, 해제 후 저장하면 autoPipeline이 false로 저장된다', async () => {
+  renderPage()
+  const checkbox = screen.getByLabelText(/자동으로 재전사·화자 구분·AI 요약/)
+  expect(checkbox).toBeChecked() // 기본값 true
+  await userEvent.click(checkbox)
+  await userEvent.click(screen.getByRole('button', { name: /저장/ }))
+  await waitFor(() => expect(loadSettings().autoPipeline).toBe(false))
+})
+
 test('AI 모델 캐시 비우기를 누르면 캐시를 지우고 다시 로드한다', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   renderPage()
