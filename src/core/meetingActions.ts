@@ -15,6 +15,20 @@ import { GROQ_ENABLED } from './features'
 import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, withDateSuffix, type SummaryTemplate } from './summarize/prompts'
 import { summarizeWithGemini } from './summarize/gemini'
 
+// 공백·대시·구두점만 있는 텍스트는 무의미로 간주한다(제거 후 의미 문자가 하나도 없음).
+const MEANINGLESS_RE = /[\s\-–—_.,·…!?~*]+/g
+
+/** 공백·구두점·대시를 제거하고 의미 있는 글자가 하나라도 남으면 true. */
+export function isMeaningfulText(text: string): boolean {
+  return text.replace(MEANINGLESS_RE, '').length > 0
+}
+
+/** 모든 세그먼트의 의미 문자 합이 minChars 이상이면 요약할 만한 전사로 본다. */
+export function hasMeaningfulTranscript(segments: { text: string }[], minChars = 10): boolean {
+  const chars = segments.reduce((n, s) => n + s.text.replace(MEANINGLESS_RE, '').length, 0)
+  return chars >= minChars
+}
+
 // 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
 // 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
 async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Promise<Float32Array> {
@@ -31,7 +45,7 @@ async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Prom
 
 /**
  * 고품질 재전사. 성공 시 세그먼트를 교체하고 화자 이름 맵을 초기화한다.
- * 오디오가 없으면 'no-audio', 전사 결과가 비면 'empty'(기존 유지), 그 외 'done'.
+ * 오디오가 없으면 'no-audio', 전사 결과가 비거나 의미 없는 조각(무음 → '-' 등)뿐이면 'empty'(기존 유지), 그 외 'done'.
  */
 export async function retranscribeMeeting(meetingId: string): Promise<'done' | 'empty' | 'no-audio'> {
   const settings = loadSettings()
@@ -63,8 +77,10 @@ export async function retranscribeMeeting(meetingId: string): Promise<'done' | '
         }, p => { if (p.kind === 'status') setStatus(p.message) })
       } finally { eng.dispose() }
     }
-    if (segs.length === 0) { result = 'empty'; return } // 빈 결과 — 기존 전사 보존
-    await replaceSegments(meetingId, segs.map(s => ({ ...s, source, isFinal: true })))
+    // 무의미한 조각('-', 공백 등)은 걸러 저장한다 — 무음 녹음이 '-' 한 조각으로 남는 걸 방지.
+    const meaningful = segs.filter(s => isMeaningfulText(s.text))
+    if (meaningful.length === 0) { result = 'empty'; return } // 빈/무의미 결과 — 기존 전사 보존
+    await replaceSegments(meetingId, meaningful.map(s => ({ ...s, source, isFinal: true })))
     // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름 오염 방지.
     await updateSpeakerNames(meetingId, {})
     result = 'done'
@@ -98,16 +114,18 @@ export async function diarizeMeeting(meetingId: string): Promise<'done' | 'empty
 }
 
 /**
- * AI 요약(Gemini). 키가 없으면 'no-key', 전사 세그먼트가 없으면 'no-segments', 그 외 'done'.
+ * AI 요약(Gemini). 키가 없으면 'no-key', 회의가 없으면 'no-segments',
+ * 요약할 만한 실제 대화가 없으면(무음·'-'뿐) 'no-content', 그 외 'done'.
  * 기본 제목이면 AI가 제안한 제목으로 갱신한다(사용자 지정 제목·요약 도중 변경은 건드리지 않음).
  */
-export async function summarizeMeeting(meetingId: string, template: SummaryTemplate): Promise<'done' | 'no-key' | 'no-segments'> {
+export async function summarizeMeeting(meetingId: string, template: SummaryTemplate): Promise<'done' | 'no-key' | 'no-segments' | 'no-content'> {
   const apiKey = loadSettings().geminiApiKey
   if (!apiKey.trim()) return 'no-key'
   const meeting = await getMeeting(meetingId)
   if (!meeting) return 'no-segments'
   const segments = (await getSegments(meetingId)).filter(s => s.isFinal)
-  if (segments.length === 0) return 'no-segments'
+  // 무의미 전사 가드: 세그먼트가 없거나 의미 문자가 부족하면 요약·제목 생성을 하지 않는다(잡도 안 뜸).
+  if (!hasMeaningfulTranscript(segments)) return 'no-content'
   await runJob(meetingId, 'summarize', async setStatus => {
     setStatus('요약 중…')
     // 제목이 자동 생성 기본값이면 AI에게 내용 기반 제목을 함께 요청한다(사용자 지정 제목은 불변).

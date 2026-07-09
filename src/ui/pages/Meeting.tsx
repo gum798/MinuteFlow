@@ -9,7 +9,7 @@ import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../cor
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
 import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
-import { retranscribeMeeting, diarizeMeeting, summarizeMeeting } from '../../core/meetingActions'
+import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, hasMeaningfulTranscript } from '../../core/meetingActions'
 import { getRecordingState } from '../../core/recorder/session'
 import { speakerColor } from '../../core/diarize/speakerColors'
 import { GROQ_ENABLED, DOCX_ENABLED } from '../../core/features'
@@ -94,8 +94,10 @@ export default function MeetingPage() {
     if (!meeting) return
     // 실패 시 던진 예외는 runJob이 job-done(detail.error)로 넘겨 마운트된 화면에서만 알린다.
     // 성공 후 데이터 재로드(setSummaries/setMeeting/setTitle)는 job-done 리스너가 담당.
-    // 버튼은 키·세그먼트가 있을 때만 노출되므로 'no-key'/'no-segments'는 실질적으로 발생하지 않는다.
-    await summarizeMeeting(meeting.id, template)
+    // 버튼은 키·의미 있는 전사가 있을 때만 노출되므로 'no-key'/'no-content'는 실질적으로 드물지만,
+    // 무의미 전사 상태에서 눌린 경우엔 잡 없이 'no-content'가 돌아오므로 여기서 직접 안내한다.
+    const result = await summarizeMeeting(meeting.id, template)
+    if (result === 'no-content') window.alert('요약할 대화 내용이 없어요.')
   }
 
   async function copyPrompt() {
@@ -198,7 +200,7 @@ export default function MeetingPage() {
             <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
           </>
         )}
-        {segments.length > 0 && (
+        {hasMeaningfulTranscript(segments) && (
           <>
             <select
               className="input"
