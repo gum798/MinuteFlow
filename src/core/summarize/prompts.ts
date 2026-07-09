@@ -26,7 +26,8 @@ const INSTRUCTIONS: Record<SummaryTemplate, string> = {
 
 // 자동 생성된 기본 제목인지 판별한다.
 // createMeeting: '회의 YYYY-MM-DD HH:mm', 고아 오디오 복구: '복구된 녹음 YYYY-MM-DD HH:mm'
-const DEFAULT_TITLE_RE = /^(회의|복구된 녹음) \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/
+// 분할 녹음이면 기본 제목 뒤에 ' (N부)' 접미가 붙을 수 있다(예: '회의 2026-07-09 13:06 (3부)').
+const DEFAULT_TITLE_RE = /^(회의|복구된 녹음) \d{4}-\d{2}-\d{2} \d{2}:\d{2}( \(\d+부\))?$/
 export function isDefaultTitle(title: string): boolean {
   return DEFAULT_TITLE_RE.test(title)
 }
@@ -35,15 +36,22 @@ const TITLE_INSTRUCTION = `이 회의는 아직 제목이 없다. 응답의 맨 
 - 좋은 예: \`제목: 결제 모듈 출시 일정 점검\`, \`제목: 테스트 데이터 작성 방안 논의\`
 - 금지: 날짜·시간·"회의"라는 단어만으로 된 제목 (예: "7월 8일 회의" 금지). 날짜·시간은 앱이 제목 뒤에 자동으로 붙이므로 제목에 넣지 않는다.`
 
-export function buildSummaryPrompt(
-  template: SummaryTemplate, meeting: Meeting, segments: TranscriptSegment[],
-  opts?: { suggestTitle?: boolean },
-): string {
-  const lines = segments.filter(s => s.isFinal).map(s => {
+// 여러 부로 나뉜 녹음을 통합 요약할 때 지시문 맨 앞에 붙인다.
+const GROUP_INSTRUCTION = `아래 전사문은 여러 부(part)로 나뉘어 연속 녹음된 하나의 회의다. 모든 부를 통합해 하나의 회의록으로 작성한다.`
+
+// 한 부의 세그먼트를 '[MM:SS] (화자) 내용' 줄들로 직렬화한다.
+function transcriptLines(meeting: Meeting, segments: TranscriptSegment[]): string[] {
+  return segments.filter(s => s.isFinal).map(s => {
     const ts = `[${formatTimestamp(s.startSec)}]`
     const name = s.speaker ? ` (${meeting.speakerNames?.[s.speaker] ?? s.speaker})` : ''
     return `${ts}${name} ${s.text}`
   })
+}
+
+export function buildSummaryPrompt(
+  template: SummaryTemplate, meeting: Meeting, segments: TranscriptSegment[],
+  opts?: { suggestTitle?: boolean },
+): string {
   // 기본 제목(자동 생성)은 프롬프트에 넣지 않는다 — 모델이 무의미한 제목을 헤딩으로 메아리치는 것 방지
   const titleMeta = isDefaultTitle(meeting.title) ? [] : [`회의 제목: ${meeting.title}`]
   return [
@@ -56,7 +64,41 @@ export function buildSummaryPrompt(
     `길이: ${formatTimestamp(meeting.durationSec)}`,
     '',
     '--- 전사문 ---',
-    ...lines,
+    ...transcriptLines(meeting, segments),
+  ].join('\n')
+}
+
+/**
+ * 여러 부를 통합해 하나의 회의록을 만드는 프롬프트를 만든다.
+ * 지시문·출력규칙·제목지시는 단일 요약과 동일하게 재사용하고, 본문만 부마다 '--- N부 전사문 ---'로 나눈다.
+ * 부별 타임스탬프는 부 시작 기준이므로 그 점을 한 줄 명시한다.
+ */
+export function buildGroupSummaryPrompt(
+  template: SummaryTemplate,
+  parts: { meeting: Meeting; segments: TranscriptSegment[] }[],
+  opts?: { suggestTitle?: boolean },
+): string {
+  const sections = parts.flatMap((part, i) => {
+    const n = part.meeting.partIndex ?? i + 1
+    return [`--- ${n}부 전사문 ---`, ...transcriptLines(part.meeting, part.segments)]
+  })
+  // 제목 메타는 첫 부 기준(사용자 지정 제목만) — 기본 제목은 넣지 않는다.
+  const firstTitle = parts[0]?.meeting.title
+  const titleMeta = firstTitle && !isDefaultTitle(firstTitle) ? [`회의 제목: ${firstTitle}`] : []
+  const totalDuration = parts.reduce((n, p) => n + p.meeting.durationSec, 0)
+  return [
+    GROUP_INSTRUCTION,
+    '',
+    INSTRUCTIONS[template],
+    '',
+    OUTPUT_RULES,
+    ...(opts?.suggestTitle ? ['', TITLE_INSTRUCTION] : []),
+    '',
+    '타임스탬프는 각 부 시작 기준입니다.',
+    ...titleMeta,
+    `길이: ${formatTimestamp(totalDuration)}`,
+    '',
+    ...sections,
   ].join('\n')
 }
 

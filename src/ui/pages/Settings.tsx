@@ -104,6 +104,22 @@ export default function Settings() {
         <p className="hint" style={{ marginTop: 8 }}>AI 요약은 Gemini 키가 등록된 경우에만 실행돼요.</p>
       </section>
 
+      <section className="card" style={{ marginTop: 22 }}>
+        <h2>분할 녹음</h2>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label htmlFor="split-minutes">분할 간격</label>
+          <select id="split-minutes" className="input" aria-label="분할 간격" value={form.splitMinutes}
+            onChange={e => setForm({ ...form, splitMinutes: Number(e.target.value) })}>
+            <option value={0}>끄기</option>
+            <option value={30}>30분</option>
+            <option value={60}>1시간</option>
+            <option value={90}>1시간 30분</option>
+            <option value={120}>2시간</option>
+          </select>
+        </div>
+        <p className="hint" style={{ marginTop: 8 }}>간격을 넘기면 대화가 없는 순간에 자동으로 나눠 저장하고, 모두 끝나면 통합 요약해요.</p>
+      </section>
+
       <details className="advanced" style={{ marginTop: 16 }}>
         <summary>고급 설정 (전사 모델·언어)</summary>
 

@@ -12,8 +12,9 @@ import { detectWebGPU, WhisperLocalEngine } from './stt/whisperLocal'
 import { DiarizeEngine } from './diarize/diarizeLocal'
 import { transcribeSamplesWithGroq } from './stt/groq'
 import { GROQ_ENABLED } from './features'
-import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, withDateSuffix, type SummaryTemplate } from './summarize/prompts'
+import { buildSummaryPrompt, buildGroupSummaryPrompt, extractSuggestedTitle, isDefaultTitle, withDateSuffix, type SummaryTemplate } from './summarize/prompts'
 import { summarizeWithGemini } from './summarize/gemini'
+import type { Meeting, TranscriptSegment } from './types'
 
 // 공백·대시·구두점만 있는 텍스트는 무의미로 간주한다(제거 후 의미 문자가 하나도 없음).
 const MEANINGLESS_RE = /[\s\-–—_.,·…!?~*]+/g
@@ -139,6 +140,46 @@ export async function summarizeMeeting(meetingId: string, template: SummaryTempl
       const fresh = await getMeeting(meetingId)
       if (fresh && isDefaultTitle(fresh.title)) {
         await updateMeetingTitle(meetingId, withDateSuffix(aiTitle, meeting.createdAt))
+      }
+    }
+  })
+  return 'done'
+}
+
+/**
+ * 여러 부(part)를 통합해 하나의 회의록으로 요약한다(Gemini). 키가 없으면 'no-key',
+ * 모든 부를 합쳐도 요약할 만한 실제 대화가 없으면 'no-content', 그 외 'done'.
+ * 진행 상태와 결과(요약·AI 제목)는 모두 **마지막 부**에 싣는다 — 종료 후 도착하는 화면이 마지막 부이므로.
+ */
+export async function summarizeGroup(
+  partIds: string[], template: SummaryTemplate,
+): Promise<'done' | 'no-key' | 'no-content'> {
+  const apiKey = loadSettings().geminiApiKey
+  if (!apiKey.trim()) return 'no-key'
+  // 모든 부의 meeting + 확정 세그먼트를 순서대로 로드한다(없는 부는 건너뛴다).
+  const parts: { meeting: Meeting; segments: TranscriptSegment[] }[] = []
+  for (const id of partIds) {
+    const meeting = await getMeeting(id)
+    if (!meeting) continue
+    const segments = (await getSegments(id)).filter(s => s.isFinal)
+    parts.push({ meeting, segments })
+  }
+  if (parts.length === 0) return 'no-content'
+  // 합산 무의미 전사 가드 — 전 부를 합쳐도 대화가 부족하면 요약하지 않는다.
+  if (!hasMeaningfulTranscript(parts.flatMap(p => p.segments))) return 'no-content'
+
+  const last = parts[parts.length - 1].meeting
+  await runJob(last.id, 'summarize', async setStatus => {
+    setStatus('통합 요약 중…')
+    const wantTitle = isDefaultTitle(last.title)
+    const prompt = buildGroupSummaryPrompt(template, parts, { suggestTitle: wantTitle })
+    const raw = await summarizeWithGemini(prompt, apiKey)
+    const { title: aiTitle, body } = wantTitle ? extractSuggestedTitle(raw) : { title: null, body: raw }
+    await saveSummary(last.id, template, body, 'gemini-3.5-flash')
+    if (wantTitle && aiTitle) {
+      const fresh = await getMeeting(last.id)
+      if (fresh && isDefaultTitle(fresh.title)) {
+        await updateMeetingTitle(last.id, withDateSuffix(aiTitle, last.createdAt))
       }
     }
   })

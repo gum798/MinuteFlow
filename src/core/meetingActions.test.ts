@@ -1,8 +1,8 @@
 import { db } from './store/db'
-import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments } from './store/meetings'
+import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting } from './store/meetings'
 import { saveSettings } from './settings'
 import { __resetJobsForTests } from './jobs'
-import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, summarizeMeeting } from './meetingActions'
+import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, summarizeMeeting, summarizeGroup } from './meetingActions'
 
 // 재전사 경로가 실제 Whisper/오디오 디코딩을 돌리지 않도록 목으로 대체한다.
 vi.mock('./audio/decode', () => ({
@@ -98,4 +98,48 @@ test('요약: 의미 있는 전사면 요약을 실행한다', async () => {
 
   expect(result).toBe('done')
   expect(geminiMock).toHaveBeenCalled()
+})
+
+describe('summarizeGroup', () => {
+  test('여러 부를 통합해 마지막 부에 요약을 저장하고, 마지막 부 제목만 갱신한다', async () => {
+    saveSettings({ geminiApiKey: 'k' })
+    const m1 = await createMeeting()
+    const m2 = await createMeeting()
+    await appendSegment({ meetingId: m1.id, startSec: 0, endSec: 5, text: '첫 부에서 논의한 안건입니다', source: 'whisper', isFinal: true })
+    await appendSegment({ meetingId: m2.id, startSec: 0, endSec: 5, text: '둘째 부에서 내린 결론입니다', source: 'whisper', isFinal: true })
+    await finishMeeting(m1.id, 60)
+    await finishMeeting(m2.id, 30)
+    geminiMock.mockResolvedValueOnce('제목: 통합 회의록\n\n## 결정사항\n합의')
+
+    const result = await summarizeGroup([m1.id, m2.id], 'minutes')
+
+    expect(result).toBe('done')
+    // 요약은 마지막 부(m2)에만 저장된다.
+    expect((await getSummaries(m2.id))[0].markdown).toContain('결정사항')
+    expect(await getSummaries(m1.id)).toHaveLength(0)
+    // 제목은 마지막 부만 AI 제목으로 갱신, 첫 부는 그대로.
+    expect((await getMeeting(m2.id))!.title).toContain('통합 회의록')
+    expect((await getMeeting(m1.id))!.title).not.toContain('통합 회의록')
+    // 통합 프롬프트가 두 부의 전사문을 모두 담았다.
+    const prompt = geminiMock.mock.calls[0][0]
+    expect(prompt).toContain('첫 부에서 논의한 안건입니다')
+    expect(prompt).toContain('둘째 부에서 내린 결론입니다')
+  })
+
+  test('Gemini 키가 없으면 no-key로 호출하지 않는다', async () => {
+    const m1 = await createMeeting()
+    const result = await summarizeGroup([m1.id], 'minutes')
+    expect(result).toBe('no-key')
+    expect(geminiMock).not.toHaveBeenCalled()
+  })
+
+  test('전 부를 합쳐도 의미 있는 대화가 없으면 no-content', async () => {
+    saveSettings({ geminiApiKey: 'k' })
+    const m1 = await createMeeting()
+    const m2 = await createMeeting()
+    await appendSegment({ meetingId: m1.id, startSec: 0, endSec: 1, text: '-', source: 'whisper', isFinal: true })
+    const result = await summarizeGroup([m1.id, m2.id], 'minutes')
+    expect(result).toBe('no-content')
+    expect(geminiMock).not.toHaveBeenCalled()
+  })
 })

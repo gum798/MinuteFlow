@@ -70,6 +70,13 @@ test('자동 처리 기본값은 체크됨이고, 해제 후 저장하면 autoPi
   await waitFor(() => expect(loadSettings().autoPipeline).toBe(false))
 })
 
+test('분할 간격을 바꿔 저장하면 splitMinutes가 반영된다', async () => {
+  renderPage()
+  await userEvent.selectOptions(screen.getByLabelText('분할 간격'), '30')
+  await userEvent.click(screen.getByRole('button', { name: /저장/ }))
+  await waitFor(() => expect(loadSettings().splitMinutes).toBe(30))
+})
+
 test('AI 모델 캐시 비우기를 누르면 캐시를 지우고 다시 로드한다', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   renderPage()

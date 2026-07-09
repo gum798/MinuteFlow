@@ -3,10 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getSpeechRecognitionCtor } from '../../core/stt/webSpeech'
 import { formatTimestamp } from '../../core/format'
 import {
-  subscribeRecording, getRecordingState, startRecording, stopRecording,
+  subscribeRecording, getRecordingState, startRecording, stopRecording, getLastSessionParts,
 } from '../../core/recorder/session'
 import { loadSettings } from '../../core/settings'
-import { runAutoPipeline } from '../../core/pipeline'
+import { enqueue, runFinalPipeline } from '../../core/pipeline'
 
 export default function Record() {
   const { phase, error, elapsedSec, interim, finals } =
@@ -35,10 +35,12 @@ export default function Record() {
   async function onStop() {
     const id = await stopRecording()
     if (!id) return
+    // 마지막 세션의 전체 부 id(분할이 없었으면 1개). 종료 후 마지막 부 화면으로 이동한다.
+    const parts = getLastSessionParts()
     navigate(`/meeting/${id}`)
-    // 설정이 켜져 있으면 회의록 화면으로 이동한 직후 자동 처리를 fire-and-forget으로 시작한다.
+    // 설정이 켜져 있으면 마지막 부 후처리 + 전체 부 통합 요약을 순차 큐에 넣는다(fire-and-forget).
     // 진행 상황은 Meeting 화면의 잡 스토어 구독으로 자동 표시된다.
-    if (loadSettings().autoPipeline) void runAutoPipeline(id)
+    if (loadSettings().autoPipeline) void enqueue(() => runFinalPipeline(parts.length ? parts : [id]))
   }
 
   return (
