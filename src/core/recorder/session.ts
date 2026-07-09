@@ -29,6 +29,13 @@ const IDLE: RecordingState = {
   phase: 'idle', meetingId: null, elapsedSec: 0, interim: '', finals: [], error: null,
 }
 
+// 녹음 중 탭 닫기/새로고침 이탈을 브라우저 기본 확인창으로 경고한다.
+// (returnValue 지정이 최신 브라우저에서 확인창을 띄우는 규약.)
+function beforeUnloadHandler(e: BeforeUnloadEvent): void {
+  e.preventDefault()
+  e.returnValue = ''
+}
+
 // 전역 세션 — 라우트 이동(컴포넌트 unmount)에도 살아남는다.
 let snapshot: RecordingState = IDLE
 let session: Session | null = null
@@ -59,6 +66,7 @@ async function cleanup(): Promise<void> {
   const s = session
   if (!s) return
   session = null
+  window.removeEventListener('beforeunload', beforeUnloadHandler)
   clearInterval(s.timer)
   // 스펙 §6 종료 순서: recorder.stop() → engine.stop() → wakeLock.disable()
   await s.recorder.stop().catch(() => {})
@@ -125,6 +133,7 @@ export async function startRecording(): Promise<void> {
     }
     recorder.start()
     engine?.start()
+    window.addEventListener('beforeunload', beforeUnloadHandler)
     await wakeLock.enable()
     set({ phase: 'recording', meetingId: meeting.id, elapsedSec: 0, interim: '', finals: [] })
   } catch {
@@ -166,6 +175,7 @@ export function __resetRecordingForTests(): void {
     clearInterval(session.timer)
     session = null
   }
+  window.removeEventListener('beforeunload', beforeUnloadHandler)
   snapshot = IDLE
   listeners.clear()
 }

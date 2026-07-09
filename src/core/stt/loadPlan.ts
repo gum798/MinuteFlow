@@ -43,7 +43,9 @@ export function buildWhisperLoadPlan(model: string, device: 'webgpu' | 'wasm'): 
   return dedupe(steps)
 }
 
-// WeSpeaker 임베딩 모델: fp16 → q8 순으로 내려간다.
+// WeSpeaker 임베딩 모델: int8 → fp32 순으로 내려간다.
+// fp16은 wasm에서 fp16 Cast가 불가해 세션 생성이 실패하므로(실측) 제거하고,
+// wasm에서 검증된 int8을 1순위로, 최후 안전망으로 fp32를 둔다.
 export function buildEmbeddingLoadPlan(): { dtype: string }[] {
-  return [{ dtype: 'fp16' }, { dtype: 'q8' }]
+  return [{ dtype: 'int8' }, { dtype: 'fp32' }]
 }

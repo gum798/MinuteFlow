@@ -55,6 +55,18 @@ test('startRecording 후 phase가 recording이고 구독자에게 알린다', as
   expect(cb).toHaveBeenCalled()
 })
 
+test('startRecording은 beforeunload 리스너를 등록하고 stop 시 제거한다', async () => {
+  const addSpy = vi.spyOn(window, 'addEventListener')
+  const removeSpy = vi.spyOn(window, 'removeEventListener')
+  await startRecording()
+  expect(addSpy).toHaveBeenCalledWith('beforeunload', expect.any(Function))
+  const handler = addSpy.mock.calls.find(c => c[0] === 'beforeunload')?.[1]
+  expect(handler).toBeDefined()
+
+  await stopRecording()
+  expect(removeSpy).toHaveBeenCalledWith('beforeunload', handler)
+})
+
 test('이미 recording이면 재호출은 no-op (createMeeting 1회)', async () => {
   await startRecording()
   await startRecording()

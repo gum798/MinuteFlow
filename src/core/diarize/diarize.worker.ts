@@ -32,7 +32,7 @@ self.onmessage = async (ev: MessageEvent<{ type: 'diarize'; audio: Float32Array 
       self.postMessage({ status: 'info', message: '화자 분석 모델 준비 중…' })
       const segModel = (await AutoModelForAudioFrameClassification.from_pretrained(SEG_MODEL, { dtype: 'q8', progress_callback: progress })) as unknown as SegModel
       const segProc = (await AutoProcessor.from_pretrained(SEG_MODEL)) as unknown as SegProcessor
-      // WeSpeaker 임베딩 모델도 fp16 세션 실패 시 q8로 폴백(호환 사다리).
+      // WeSpeaker 임베딩 모델도 int8 세션 실패 시 fp32로 폴백(호환 사다리).
       const embPlan = buildEmbeddingLoadPlan()
       let embModel: EmbModel | null = null
       let lastEmbError: unknown = null
