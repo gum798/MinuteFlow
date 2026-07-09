@@ -7,6 +7,7 @@ import { saveSettings } from '../../core/settings'
 import AppShell from '../AppShell'
 import Home from './Home'
 import MeetingPage from './Meeting'
+import { __resetJobsForTests } from '../../core/jobs'
 
 vi.mock('../../core/audio/decode', () => ({
   decodeTo16kMono: vi.fn(async () => new Float32Array(16000)),
@@ -34,6 +35,7 @@ vi.mock('../../core/summarize/gemini', () => ({
 beforeEach(async () => {
   localStorage.clear()
   summarizeMock.mockClear()
+  __resetJobsForTests() // 전역 작업 스토어를 테스트 간 초기화
   await Promise.all([db.meetings.clear(), db.audioChunks.clear(), db.transcriptSegments.clear(), db.summaries.clear()])
 })
 
@@ -235,4 +237,27 @@ test('저장된 요약이 마운트 시 로드되어 보인다', async () => {
   renderPage(m.id)
   await waitFor(() => expect(screen.getByText(/저장된 요약/)).toBeInTheDocument())
   expect(screen.getByText('회의록', { selector: '.badge' })).toBeInTheDocument() // 템플릿 라벨 배지
+})
+
+test('화자 구분 진행 중 페이지를 떠났다 돌아와도 진행 문구가 유지되고 완료 후 배지가 갱신된다', async () => {
+  const m = await seed()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  // 화자 구분을 지연 promise로 붙잡아 진행 중 상태를 유지시킨다.
+  let release!: (regions: { start: number; end: number; speaker: string }[]) => void
+  diarizeMock.mockImplementationOnce(() => new Promise(r => { release = r }))
+
+  const first = renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: /화자 구분/ }))
+  await userEvent.click(screen.getByRole('button', { name: /화자 구분/ }))
+  await waitFor(() => expect(screen.getByRole('button', { name: /화자 구분 중/ })).toBeInTheDocument())
+
+  // 다른 메뉴로 이동(언마운트) 후 회의로 복귀(재마운트)
+  first.unmount()
+  renderPage(m.id)
+  // 전역 작업 스토어 덕분에 진행 문구가 여전히 보인다
+  await waitFor(() => expect(screen.getByRole('button', { name: /화자 구분 중/ })).toBeInTheDocument())
+
+  // 작업 완료 → job-done 리스너가 세그먼트를 재로드해 화자 배지가 뜬다
+  release([{ start: 0, end: 5, speaker: 'SPK1' }])
+  await waitFor(() => expect(screen.getByText('SPK1')).toBeInTheDocument())
 })

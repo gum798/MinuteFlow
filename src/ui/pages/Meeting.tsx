@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
 import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, saveSummary, getSummaries } from '../../core/store/meetings'
+import { subscribeJobs, getJobs, runJob, type JobDoneDetail } from '../../core/jobs'
 import { useUndoToast } from '../UndoToast'
 import { Markdown } from '../Markdown'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
@@ -40,12 +41,11 @@ export default function MeetingPage() {
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [title, setTitle] = useState('')
   const [audioAvailable, setAudioAvailable] = useState(false)
-  const [retranscribing, setRetranscribing] = useState<string | null>(null)
-  const [diarizing, setDiarizing] = useState<string | null>(null)
   const [summaries, setSummaries] = useState<Summary[]>([])
   const [template, setTemplate] = useState<SummaryTemplate>('minutes')
-  const [summarizing, setSummarizing] = useState(false)
   const [copyToast, setCopyToast] = useState(false)
+  // 재전사·화자 구분·요약은 전역 작업 스토어에 산다 → 페이지를 떠났다 와도 진행 상태가 유지된다.
+  const jobs = useSyncExternalStore(subscribeJobs, getJobs)
 
   useEffect(() => {
     if (!id) return
@@ -61,8 +61,30 @@ export default function MeetingPage() {
     })()
   }, [id])
 
+  // 작업(재전사·화자 구분·요약)이 끝나면 — 이 회의가 마운트돼 있을 때만 — 결과를 다시 읽어
+  // 세그먼트·요약·회의(제목/이름맵)를 갱신한다. 언마운트 중 완료돼도 DB엔 이미 반영돼 있어 안전.
+  useEffect(() => {
+    if (!id) return
+    function onDone(e: Event): void {
+      const detail = (e as CustomEvent<JobDoneDetail>).detail
+      if (detail.meetingId !== id) return
+      if (detail.error) { window.alert(detail.error); return }
+      void (async () => {
+        setSegments((await getSegments(id)).filter(s => s.isFinal))
+        setSummaries(await getSummaries(id))
+        const m = await getMeeting(id)
+        if (m) { setMeeting(m); setTitle(m.title) }
+      })()
+    }
+    window.addEventListener('minuteflow:job-done', onDone)
+    return () => window.removeEventListener('minuteflow:job-done', onDone)
+  }, [id])
+
   if (meeting === undefined) return <div><p className="sub">불러오는 중…</p></div>
   if (meeting === null) return <div><p className="sub">회의록을 찾을 수 없습니다.</p><Link to="/">홈으로</Link></div>
+
+  // 이 회의에 진행 중인 작업(있다면 하나 — 버튼 상호배타). 진행 문구·버튼 비활성에 쓴다.
+  const job = jobs.find(j => j.meetingId === meeting.id) ?? null
 
   async function saveTitle() {
     if (!meeting || !title.trim() || title === meeting.title) return
@@ -89,30 +111,25 @@ export default function MeetingPage() {
 
   async function runSummarize() {
     if (!meeting) return
-    setSummarizing(true)
-    try {
+    const m = meeting
+    // 실패 시 던진 예외는 runJob이 job-done(detail.error)로 넘겨 마운트된 화면에서만 알린다.
+    // 성공 후 데이터 재로드(setSummaries/setMeeting/setTitle)는 job-done 리스너가 담당.
+    await runJob(m.id, 'summarize', async setStatus => {
+      setStatus('요약 중…')
       // 제목이 자동 생성 기본값이면 AI에게 내용 기반 제목을 함께 요청한다(사용자 지정 제목은 불변).
-      const wantTitle = isDefaultTitle(meeting.title)
-      const prompt = buildSummaryPrompt(template, meeting, segments, { suggestTitle: wantTitle })
+      const wantTitle = isDefaultTitle(m.title)
+      const prompt = buildSummaryPrompt(template, m, segments, { suggestTitle: wantTitle })
       const raw = await summarizeWithGemini(prompt, loadSettings().geminiApiKey)
       const { title: aiTitle, body } = wantTitle ? extractSuggestedTitle(raw) : { title: null, body: raw }
-      await saveSummary(meeting.id, template, body, 'gemini-3.5-flash')
-      setSummaries(await getSummaries(meeting.id))
+      await saveSummary(m.id, template, body, 'gemini-3.5-flash')
       // AI가 형식을 지켜 제목을 냈을 때만 반영 — 요약 도중 사용자가 제목을 고쳤으면(기본값 아님) 건드리지 않음.
       if (wantTitle && aiTitle) {
-        const fresh = await getMeeting(meeting.id)
+        const fresh = await getMeeting(m.id)
         if (fresh && isDefaultTitle(fresh.title)) {
-          const titled = withDateSuffix(aiTitle, meeting.createdAt)
-          await updateMeetingTitle(meeting.id, titled)
-          setMeeting(prev => (prev ? { ...prev, title: titled } : prev))
-          setTitle(titled)
+          await updateMeetingTitle(m.id, withDateSuffix(aiTitle, m.createdAt))
         }
       }
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e))
-    } finally {
-      setSummarizing(false)
-    }
+    })
   }
 
   async function copyPrompt() {
@@ -137,73 +154,69 @@ export default function MeetingPage() {
   async function retranscribe() {
     if (!meeting || !window.confirm('기존 전사를 새 결과로 교체할까요?')) return
     const settings = loadSettings()
-    setRetranscribing('오디오 준비 중…')
-    try {
-      const blob = await getMeetingAudio(meeting.id)
+    const mid = meeting.id
+    // 성공 시 세그먼트·이름맵 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
+    await runJob(mid, 'retranscribe', async setStatus => {
+      setStatus('오디오 준비 중…')
+      const blob = await getMeetingAudio(mid)
       if (!blob) return
-      const samples = await decodeMeetingAudioWithRepair(meeting.id, blob)
+      const samples = await decodeMeetingAudioWithRepair(mid, blob)
       let segs
       let source: 'whisper' | 'groq'
       if (GROQ_ENABLED && settings.groqApiKey) {
         source = 'groq'
-        setRetranscribing('Groq로 전사 중…')
+        setStatus('Groq로 전사 중…')
         segs = await transcribeSamplesWithGroq(samples, {
           apiKey: settings.groqApiKey, language: settings.language,
-          onPart: (d, t) => setRetranscribing(`Groq 분할 전사 중 (${d}/${t})`),
+          onPart: (d, t) => setStatus(`Groq 분할 전사 중 (${d}/${t})`),
         })
       } else {
         source = 'whisper'
         const webgpu = await detectWebGPU()
         const eng = new WhisperLocalEngine()
         try {
-          setRetranscribing('브라우저 Whisper로 전사 중… (모델 다운로드가 필요할 수 있어요)')
+          setStatus('브라우저 Whisper로 전사 중… (모델 다운로드가 필요할 수 있어요)')
           segs = await eng.transcribe(samples, {
             model: webgpu ? settings.whisperModel : 'onnx-community/whisper-base',
             device: webgpu ? 'webgpu' : 'wasm',
             language: settings.language,
-          }, p => { if (p.kind === 'status') setRetranscribing(p.message) })
+          }, p => { if (p.kind === 'status') setStatus(p.message) })
         } finally { eng.dispose() }
       }
       if (segs.length === 0) {
+        // 비-에러 안내 — 결과를 바꾸지 않으므로 여기서 직접 알린다.
         window.alert('전사 결과가 비어 있어 기존 내용을 유지합니다.')
         return
       }
-      await replaceSegments(meeting.id, segs.map(s => ({ ...s, source, isFinal: true })))
+      await replaceSegments(mid, segs.map(s => ({ ...s, source, isFinal: true })))
       // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름이 다른 화자에 잘못 붙는 것 방지.
-      await updateSpeakerNames(meeting.id, {})
-      setMeeting({ ...meeting, speakerNames: {} })
-      setSegments((await getSegments(meeting.id)).filter(s => s.isFinal))
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e))
-    } finally {
-      setRetranscribing(null)
-    }
+      await updateSpeakerNames(mid, {})
+    })
   }
 
   async function diarize() {
     if (!meeting) return
-    setDiarizing('오디오 준비 중…')
-    const engine = new DiarizeEngine()
-    try {
-      const blob = await getMeetingAudio(meeting.id)
-      if (!blob) return
-      const samples = await decodeMeetingAudioWithRepair(meeting.id, blob)
-      setDiarizing('화자 구분 중…')
-      const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setDiarizing(p.message) })
-      if (regions.length === 0) {
-        window.alert('화자를 구분할 수 없었습니다.')
-        return
+    const mid = meeting.id
+    // 성공 시 세그먼트·회의 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
+    await runJob(mid, 'diarize', async setStatus => {
+      setStatus('오디오 준비 중…')
+      const engine = new DiarizeEngine()
+      try {
+        const blob = await getMeetingAudio(mid)
+        if (!blob) return
+        const samples = await decodeMeetingAudioWithRepair(mid, blob)
+        setStatus('화자 구분 중…')
+        const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setStatus(p.message) })
+        if (regions.length === 0) {
+          // 비-에러 안내 — 결과를 바꾸지 않으므로 여기서 직접 알린다.
+          window.alert('화자를 구분할 수 없었습니다.')
+          return
+        }
+        await applySpeakers(mid, regions)
+      } finally {
+        engine.dispose()
       }
-      await applySpeakers(meeting.id, regions)
-      setSegments((await getSegments(meeting.id)).filter(s => s.isFinal))
-      const m = await getMeeting(meeting.id)
-      if (m) setMeeting(m)
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e))
-    } finally {
-      engine.dispose()
-      setDiarizing(null)
-    }
+    })
   }
 
   async function renameSpeaker(speaker: string) {
@@ -259,12 +272,12 @@ export default function MeetingPage() {
         <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
         {audioAvailable && (
           <>
-            <button className="btn btn-outline btn-sm" disabled={retranscribing !== null || diarizing !== null} onClick={() => void retranscribe()}>
-              {retranscribing ?? '고품질 재전사'}
+            <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void retranscribe()}>
+              {job?.kind === 'retranscribe' ? job.status : '고품질 재전사'}
             </button>
             {segments.length > 0 && (
-              <button className="btn btn-outline btn-sm" disabled={retranscribing !== null || diarizing !== null} onClick={() => void diarize()}>
-                {diarizing ?? '화자 구분'}
+              <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void diarize()}>
+                {job?.kind === 'diarize' ? job.status : '화자 구분'}
               </button>
             )}
             <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
@@ -285,8 +298,8 @@ export default function MeetingPage() {
             </select>
             {loadSettings().geminiApiKey.trim()
               ? (
-                <button className="btn btn-primary btn-sm" disabled={summarizing} onClick={() => void runSummarize()}>
-                  {summarizing ? '요약 중…' : 'AI 요약'}
+                <button className="btn btn-primary btn-sm" disabled={job !== null} onClick={() => void runSummarize()}>
+                  {job?.kind === 'summarize' ? (job.status || '요약 중…') : 'AI 요약'}
                 </button>
               )
               : (
@@ -294,7 +307,7 @@ export default function MeetingPage() {
               )}
           </>
         )}
-        <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} disabled={retranscribing !== null || diarizing !== null} onClick={() => void removeMeeting()}>삭제</button>
+        <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} disabled={job !== null} onClick={() => void removeMeeting()}>삭제</button>
       </div>
       {summaries.map(s => (
         <section key={s.id} className="card" style={{ marginBottom: 12 }}>
