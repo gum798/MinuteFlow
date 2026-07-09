@@ -95,14 +95,17 @@ export default function MeetingPage() {
       const wantTitle = isDefaultTitle(meeting.title)
       const prompt = buildSummaryPrompt(template, meeting, segments, { suggestTitle: wantTitle })
       const raw = await summarizeWithGemini(prompt, loadSettings().geminiApiKey)
-      const { title: aiTitle, body } = extractSuggestedTitle(raw)
+      const { title: aiTitle, body } = wantTitle ? extractSuggestedTitle(raw) : { title: null, body: raw }
       await saveSummary(meeting.id, template, body, 'gemini-3.5-flash')
       setSummaries(await getSummaries(meeting.id))
-      // AI가 형식을 지켜 제목을 냈을 때만 반영 — 미준수 시 조용히 기본 제목 유지.
+      // AI가 형식을 지켜 제목을 냈을 때만 반영 — 요약 도중 사용자가 제목을 고쳤으면(기본값 아님) 건드리지 않음.
       if (wantTitle && aiTitle) {
-        await updateMeetingTitle(meeting.id, aiTitle)
-        setMeeting({ ...meeting, title: aiTitle })
-        setTitle(aiTitle)
+        const fresh = await getMeeting(meeting.id)
+        if (fresh && isDefaultTitle(fresh.title)) {
+          await updateMeetingTitle(meeting.id, aiTitle)
+          setMeeting(prev => (prev ? { ...prev, title: aiTitle } : prev))
+          setTitle(aiTitle)
+        }
       }
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e))
