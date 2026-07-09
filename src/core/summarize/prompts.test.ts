@@ -45,9 +45,9 @@ test('isDefaultTitle: 자동 생성 제목만 참', () => {
 test('suggestTitle 옵션이면 제목 지시문이 붙는다', () => {
   const without = buildSummaryPrompt('minutes', meeting, segments)
   const withTitle = buildSummaryPrompt('minutes', meeting, segments, { suggestTitle: true })
-  expect(without).not.toContain('응답의 첫 줄에')
-  expect(withTitle).toContain('응답의 첫 줄에')
-  expect(withTitle).toContain('제목: <내용을 대표하는')
+  expect(without).not.toContain('맨 첫 줄은 반드시')
+  expect(withTitle).toContain('맨 첫 줄은 반드시')
+  expect(withTitle).toContain('금지: 날짜')
   expect(withTitle).toContain('결정사항') // 기존 지시문도 유지
 })
 
@@ -69,4 +69,24 @@ test('extractSuggestedTitle: 제목은 60자로 클램프', () => {
   const long = 'ㄱ'.repeat(80)
   const r = extractSuggestedTitle(`제목: ${long}\n\n본문`)
   expect(r.title).toHaveLength(60)
+})
+
+test('기본 제목은 프롬프트 메타데이터에서 제외된다 (메아리 방지)', () => {
+  const def = { ...meeting, title: '회의 2026-07-08 15:58' }
+  expect(buildSummaryPrompt('minutes', def, segments)).not.toContain('회의 2026-07-08 15:58')
+  expect(buildSummaryPrompt('minutes', meeting, segments)).toContain('회의 제목: 주간회의')
+})
+
+test('출력 규칙(인사말 금지)이 모든 템플릿에 포함된다', () => {
+  for (const t of ['minutes', 'brief', 'timeline'] as const) {
+    expect(buildSummaryPrompt(t, meeting, segments)).toContain('인사말·머리말')
+  }
+})
+
+test('extractSuggestedTitle은 프리앰블 뒤의 제목 줄도 찾고 프리앰블을 버린다', () => {
+  const raw = '요청하신 회의록입니다.\n\n제목: 결제 일정 점검\n\n## 안건\n내용'
+  const { title, body } = extractSuggestedTitle(raw)
+  expect(title).toBe('결제 일정 점검')
+  expect(body).toBe('## 안건\n내용')
+  expect(body).not.toContain('요청하신')
 })
