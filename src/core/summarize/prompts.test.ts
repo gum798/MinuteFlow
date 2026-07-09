@@ -1,4 +1,4 @@
-import { buildSummaryPrompt, TEMPLATE_LABELS } from './prompts'
+import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, TEMPLATE_LABELS } from './prompts'
 import type { Meeting, TranscriptSegment } from '../types'
 
 const meeting: Meeting = {
@@ -32,4 +32,41 @@ test('템플릿별 지시문이 다르다', () => {
 
 test('TEMPLATE_LABELS', () => {
   expect(TEMPLATE_LABELS.minutes).toBe('회의록')
+})
+
+test('isDefaultTitle: 자동 생성 제목만 참', () => {
+  expect(isDefaultTitle('회의 2026-07-06 14:30')).toBe(true)       // createMeeting 기본
+  expect(isDefaultTitle('복구된 녹음 2026-07-06 14:30')).toBe(true) // 고아 오디오 복구
+  expect(isDefaultTitle('주간 제품 회의')).toBe(false)              // 사용자 지정
+  expect(isDefaultTitle('recording_2026-07-06.webm')).toBe(false)  // 업로드 파일명풍
+  expect(isDefaultTitle('회의 2026-07-06')).toBe(false)            // 시각 없는 부분 매치
+})
+
+test('suggestTitle 옵션이면 제목 지시문이 붙는다', () => {
+  const without = buildSummaryPrompt('minutes', meeting, segments)
+  const withTitle = buildSummaryPrompt('minutes', meeting, segments, { suggestTitle: true })
+  expect(without).not.toContain('응답의 첫 줄에')
+  expect(withTitle).toContain('응답의 첫 줄에')
+  expect(withTitle).toContain('제목: <내용을 대표하는')
+  expect(withTitle).toContain('결정사항') // 기존 지시문도 유지
+})
+
+test('extractSuggestedTitle: 제목 줄을 떼어낸다', () => {
+  const r = extractSuggestedTitle('제목: 주간 제품 회의\n\n## 요약\n내용')
+  expect(r.title).toBe('주간 제품 회의')
+  expect(r.body).toBe('## 요약\n내용')
+  expect(r.body).not.toContain('제목:')
+})
+
+test('extractSuggestedTitle: 미매치면 원문 그대로', () => {
+  const md = '## 요약\n내용'
+  const r = extractSuggestedTitle(md)
+  expect(r.title).toBeNull()
+  expect(r.body).toBe(md)
+})
+
+test('extractSuggestedTitle: 제목은 60자로 클램프', () => {
+  const long = 'ㄱ'.repeat(80)
+  const r = extractSuggestedTitle(`제목: ${long}\n\n본문`)
+  expect(r.title).toHaveLength(60)
 })

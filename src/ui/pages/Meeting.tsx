@@ -7,7 +7,7 @@ import { Markdown } from '../Markdown'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
-import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
+import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
 import { summarizeWithGemini } from '../../core/summarize/gemini'
 import { decodeTo16kMono } from '../../core/audio/decode'
 import { repairHeaderlessWebm } from '../../core/audio/webmRepair'
@@ -91,10 +91,19 @@ export default function MeetingPage() {
     if (!meeting) return
     setSummarizing(true)
     try {
-      const prompt = buildSummaryPrompt(template, meeting, segments)
-      const markdown = await summarizeWithGemini(prompt, loadSettings().geminiApiKey)
-      await saveSummary(meeting.id, template, markdown, 'gemini-3.5-flash')
+      // 제목이 자동 생성 기본값이면 AI에게 내용 기반 제목을 함께 요청한다(사용자 지정 제목은 불변).
+      const wantTitle = isDefaultTitle(meeting.title)
+      const prompt = buildSummaryPrompt(template, meeting, segments, { suggestTitle: wantTitle })
+      const raw = await summarizeWithGemini(prompt, loadSettings().geminiApiKey)
+      const { title: aiTitle, body } = extractSuggestedTitle(raw)
+      await saveSummary(meeting.id, template, body, 'gemini-3.5-flash')
       setSummaries(await getSummaries(meeting.id))
+      // AI가 형식을 지켜 제목을 냈을 때만 반영 — 미준수 시 조용히 기본 제목 유지.
+      if (wantTitle && aiTitle) {
+        await updateMeetingTitle(meeting.id, aiTitle)
+        setMeeting({ ...meeting, title: aiTitle })
+        setTitle(aiTitle)
+      }
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e))
     } finally {
