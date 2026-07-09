@@ -9,18 +9,44 @@ function defaultTitle(now: Date): string {
   return `회의 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
 }
 
-export async function createMeeting(language = 'ko-KR'): Promise<Meeting> {
+export interface CreateMeetingOpts {
+  /** 분할 그룹 id(= 첫 부의 회의 id). */
+  groupId?: string
+  /** 분할 그룹 내 부 번호(1부터). */
+  partIndex?: number
+  /** 기본 제목 뒤에 붙일 접미어 (예: ' (2부)'). */
+  titleSuffix?: string
+}
+
+export async function createMeeting(language = 'ko-KR', opts: CreateMeetingOpts = {}): Promise<Meeting> {
   const now = new Date()
   const meeting: Meeting = {
     id: crypto.randomUUID(),
-    title: defaultTitle(now),
+    title: defaultTitle(now) + (opts.titleSuffix ?? ''),
     createdAt: now.getTime(),
     durationSec: 0,
     status: 'recording',
     language,
+    ...(opts.groupId !== undefined ? { groupId: opts.groupId } : {}),
+    ...(opts.partIndex !== undefined ? { partIndex: opts.partIndex } : {}),
   }
   await db.meetings.add(meeting)
   return meeting
+}
+
+/**
+ * 첫 분할이 발생할 때 첫 부(part)에 그룹 메타(groupId·partIndex=1)를 부여한다.
+ * 제목은 아직 기본 제목(baseTitle)일 때만 titleSuffix(예: ' (1부)')를 덧붙인다
+ * — 사용자가 녹음 중 제목을 바꿨다면 건드리지 않는다.
+ */
+export async function markGroupFirstPart(
+  meetingId: string, groupId: string, baseTitle: string, titleSuffix: string,
+): Promise<void> {
+  const m = await db.meetings.get(meetingId)
+  if (!m) return
+  const patch: Partial<Meeting> = { groupId, partIndex: 1 }
+  if (m.title === baseTitle) patch.title = baseTitle + titleSuffix
+  await db.meetings.update(meetingId, patch)
 }
 
 export async function appendAudioChunk(

@@ -1,8 +1,10 @@
 import type { Mock } from 'vitest'
 import {
-  subscribeRecording, getRecordingState, startRecording, stopRecording, __resetRecordingForTests,
+  subscribeRecording, getRecordingState, startRecording, stopRecording,
+  getLastSessionParts, __setLevelMeterForTests, __resetRecordingForTests,
 } from './session'
 import { createMeeting, appendAudioChunk, finishMeeting } from '../store/meetings'
+import { loadSettings } from '../settings'
 import { ChunkedRecorder } from './chunkedRecorder'
 
 vi.mock('../store/meetings', () => ({
@@ -10,7 +12,9 @@ vi.mock('../store/meetings', () => ({
   appendAudioChunk: vi.fn().mockResolvedValue(undefined),
   appendSegment: vi.fn().mockResolvedValue(undefined),
   finishMeeting: vi.fn().mockResolvedValue(undefined),
+  markGroupFirstPart: vi.fn().mockResolvedValue(undefined),
 }))
+vi.mock('../settings', () => ({ loadSettings: vi.fn(() => ({ splitMinutes: 60 })) }))
 vi.mock('./mime', () => ({ pickMimeType: () => 'audio/webm' }))
 vi.mock('./chunkedRecorder', () => ({
   ChunkedRecorder: vi.fn(function (this: Record<string, unknown>) {
@@ -37,6 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   ;(createMeeting as Mock).mockResolvedValue({ id: 'm1', language: 'ko-KR' })
   ;(appendAudioChunk as Mock).mockResolvedValue(undefined)
+  ;(loadSettings as Mock).mockReturnValue({ splitMinutes: 60 })
   vi.stubGlobal('navigator', {
     mediaDevices: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
   })
@@ -108,4 +113,103 @@ test('getUserMedia 거부 시 error 상태 + idle 유지', async () => {
 
 test('getRecordingState는 변경 전까지 같은 참조를 돌려준다 (useSyncExternalStore 안전)', () => {
   expect(getRecordingState()).toBe(getRecordingState())
+})
+
+test('분할이 없으면 getLastSessionParts는 마지막 회의 id 하나만 담는다', async () => {
+  await startRecording()
+  await stopRecording()
+  expect(getLastSessionParts()).toEqual(['m1'])
+})
+
+// --- 분할 로테이션 (무음 감지 세션 로테이션) ---
+
+/** 항상 같은 정규화 RMS를 돌려주는 레벨미터 mock. */
+function constMeter(rms: number): { read: Mock; close: Mock } {
+  return { read: vi.fn(() => rms), close: vi.fn() }
+}
+
+/** createMeeting을 부 순서대로 다른 id로 응답하도록 설정. */
+function seedTwoParts(): void {
+  ;(createMeeting as Mock).mockReset()
+  ;(createMeeting as Mock)
+    .mockResolvedValueOnce({ id: 'm1', language: 'ko-KR', title: 't1' })
+    .mockResolvedValueOnce({ id: 'm2', language: 'ko-KR', title: 't2' })
+}
+
+test('splitMinutes 경과 + 무음 2틱이면 무음 시점에 새 부로 로테이션한다', async () => {
+  ;(loadSettings as Mock).mockReturnValue({ splitMinutes: 1 }) // 60초 목표
+  seedTwoParts()
+  __setLevelMeterForTests(() => constMeter(0)) // 계속 무음
+  const partComplete = vi.fn()
+  window.addEventListener('minuteflow:part-complete', partComplete)
+
+  vi.useFakeTimers()
+  try {
+    await startRecording()
+    expect(getRecordingState().partIndex).toBe(1)
+    await vi.advanceTimersByTimeAsync(62_000) // 60초 목표 + 여유
+
+    expect(createMeeting).toHaveBeenCalledTimes(2) // 부1(시작) + 부2(로테이션)
+    expect(finishMeeting).toHaveBeenCalledWith('m1', expect.any(Number))
+    expect(partComplete).toHaveBeenCalledTimes(1)
+    expect((partComplete.mock.calls[0][0] as CustomEvent).detail).toEqual({ meetingId: 'm1' })
+    // 레코더 2개 생성 + 같은 스트림 재사용
+    const calls = (ChunkedRecorder as unknown as Mock).mock.calls
+    expect(calls.length).toBe(2)
+    expect(calls[1][0]).toBe(calls[0][0])
+    expect(getRecordingState().partIndex).toBe(2)
+    expect(getRecordingState().meetingId).toBe('m2')
+  } finally {
+    vi.useRealTimers()
+    window.removeEventListener('minuteflow:part-complete', partComplete)
+  }
+})
+
+test('무음이 없으면 하드캡 전까지 로테이션하지 않고 하드캡에서 강제 분할한다', async () => {
+  ;(loadSettings as Mock).mockReturnValue({ splitMinutes: 1 }) // 목표 60초, 하드캡 360초
+  seedTwoParts()
+  __setLevelMeterForTests(() => constMeter(0.5)) // 계속 큰 소리 → 무음 아님
+
+  vi.useFakeTimers()
+  try {
+    await startRecording()
+    await vi.advanceTimersByTimeAsync(359_000)
+    expect(createMeeting).toHaveBeenCalledTimes(1) // 하드캡 전 → 분할 없음
+    await vi.advanceTimersByTimeAsync(2_000) // 총 361초 → 하드캡 초과
+    expect(createMeeting).toHaveBeenCalledTimes(2)
+    expect(getRecordingState().partIndex).toBe(2)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('splitMinutes=0이면 무음이 계속돼도 로테이션하지 않는다', async () => {
+  ;(loadSettings as Mock).mockReturnValue({ splitMinutes: 0 })
+  __setLevelMeterForTests(() => constMeter(0))
+  vi.useFakeTimers()
+  try {
+    await startRecording()
+    await vi.advanceTimersByTimeAsync(600_000) // 10분
+    expect(createMeeting).toHaveBeenCalledTimes(1)
+    expect(getRecordingState().partIndex).toBe(1)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('로테이션 후 stopRecording하면 getLastSessionParts가 [1부, 2부]를 순서대로 돌려준다', async () => {
+  ;(loadSettings as Mock).mockReturnValue({ splitMinutes: 1 })
+  seedTwoParts()
+  __setLevelMeterForTests(() => constMeter(0))
+  vi.useFakeTimers()
+  try {
+    await startRecording()
+    await vi.advanceTimersByTimeAsync(62_000)
+    expect(getLastSessionParts()).toEqual([]) // 아직 녹음 중
+    const id = await stopRecording()
+    expect(id).toBe('m2') // 반환은 마지막 부
+    expect(getLastSessionParts()).toEqual(['m1', 'm2'])
+  } finally {
+    vi.useRealTimers()
+  }
 })

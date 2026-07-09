@@ -9,6 +9,8 @@ export interface AppSettings {
   language: string
   /** 녹음 종료 후 자동으로 재전사·화자 구분·AI 요약을 실행할지 (기본 켜짐). */
   autoPipeline: boolean
+  /** 녹음이 이 분(minute)을 넘으면 무음 시점에 새 부(part)로 분할한다. 0이면 분할 끄기. (기본 60) */
+  splitMinutes: number
 }
 
 const KEY = 'minuteflow.settings'
@@ -19,6 +21,7 @@ const DEFAULTS: AppSettings = {
   whisperModel: 'onnx-community/whisper-large-v3-turbo',
   language: 'ko',
   autoPipeline: true,
+  splitMinutes: 60,
 }
 
 export function loadSettings(): AppSettings {

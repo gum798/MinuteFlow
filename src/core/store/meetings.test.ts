@@ -1,6 +1,6 @@
 import { db } from './db'
 import {
-  createMeeting, appendAudioChunk, appendSegment, finishMeeting,
+  createMeeting, appendAudioChunk, appendSegment, finishMeeting, markGroupFirstPart,
   updateMeetingTitle, listMeetings, getMeeting, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting, recoverOrphanAudio,
   createUploadMeeting, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames,
@@ -21,6 +21,32 @@ test('createMeeting은 recording 상태의 회의를 만든다', async () => {
   expect(m.language).toBe('ko-KR')
   expect(m.title).toMatch(/^회의 /)
   expect(await getMeeting(m.id)).toMatchObject({ id: m.id })
+})
+
+test('createMeeting은 분할 opts(groupId·partIndex·titleSuffix)를 반영한다', async () => {
+  const m = await createMeeting('ko-KR', { groupId: 'g1', partIndex: 2, titleSuffix: ' (2부)' })
+  expect(m.groupId).toBe('g1')
+  expect(m.partIndex).toBe(2)
+  expect(m.title).toMatch(/ \(2부\)$/)
+  const got = await getMeeting(m.id)
+  expect(got).toMatchObject({ groupId: 'g1', partIndex: 2 })
+})
+
+test('markGroupFirstPart는 첫 부에 그룹 메타를 부여하고 기본 제목일 때만 접미어를 붙인다', async () => {
+  const a = await createMeeting()
+  const baseTitle = a.title
+  await markGroupFirstPart(a.id, a.id, baseTitle, ' (1부)')
+  const got = await getMeeting(a.id)
+  expect(got).toMatchObject({ groupId: a.id, partIndex: 1 })
+  expect(got?.title).toBe(baseTitle + ' (1부)')
+
+  // 사용자가 이미 제목을 바꿨다면(=기본 제목 아님) 접미어를 붙이지 않는다.
+  const b = await createMeeting()
+  await updateMeetingTitle(b.id, '내가 정한 제목')
+  await markGroupFirstPart(b.id, b.id, b.title, ' (1부)')
+  const gotB = await getMeeting(b.id)
+  expect(gotB?.title).toBe('내가 정한 제목')
+  expect(gotB).toMatchObject({ groupId: b.id, partIndex: 1 })
 })
 
 test('listMeetings는 createdAt 내림차순', async () => {

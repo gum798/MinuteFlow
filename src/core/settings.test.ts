@@ -5,8 +5,14 @@ beforeEach(() => localStorage.clear())
 test('저장된 값이 없으면 기본값', () => {
   expect(loadSettings()).toEqual({
     groqApiKey: '', whisperModel: 'onnx-community/whisper-large-v3-turbo', language: 'ko',
-    geminiApiKey: '', autoPipeline: true,
+    geminiApiKey: '', autoPipeline: true, splitMinutes: 60,
   })
+})
+
+test('splitMinutes 기본값은 60이고 0(끄기)으로 저장된다', () => {
+  expect(loadSettings().splitMinutes).toBe(60)
+  saveSettings({ splitMinutes: 0 })
+  expect(loadSettings().splitMinutes).toBe(0)
 })
 
 test('autoPipeline 기본값은 true이고 끄면 저장된다', () => {
