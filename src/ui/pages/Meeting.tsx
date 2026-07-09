@@ -7,7 +7,7 @@ import { Markdown } from '../Markdown'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
-import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
+import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, withDateSuffix, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
 import { summarizeWithGemini } from '../../core/summarize/gemini'
 import { decodeTo16kMono } from '../../core/audio/decode'
 import { repairHeaderlessWebm } from '../../core/audio/webmRepair'
@@ -102,9 +102,10 @@ export default function MeetingPage() {
       if (wantTitle && aiTitle) {
         const fresh = await getMeeting(meeting.id)
         if (fresh && isDefaultTitle(fresh.title)) {
-          await updateMeetingTitle(meeting.id, aiTitle)
-          setMeeting(prev => (prev ? { ...prev, title: aiTitle } : prev))
-          setTitle(aiTitle)
+          const titled = withDateSuffix(aiTitle, meeting.createdAt)
+          await updateMeetingTitle(meeting.id, titled)
+          setMeeting(prev => (prev ? { ...prev, title: titled } : prev))
+          setTitle(titled)
         }
       }
     } catch (e) {

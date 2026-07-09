@@ -1,4 +1,4 @@
-import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, TEMPLATE_LABELS } from './prompts'
+import { buildSummaryPrompt, extractSuggestedTitle, isDefaultTitle, withDateSuffix, TEMPLATE_LABELS } from './prompts'
 import type { Meeting, TranscriptSegment } from '../types'
 
 const meeting: Meeting = {
@@ -89,4 +89,9 @@ test('extractSuggestedTitle은 프리앰블 뒤의 제목 줄도 찾고 프리�
   expect(title).toBe('결제 일정 점검')
   expect(body).toBe('## 안건\n내용')
   expect(body).not.toContain('요청하신')
+})
+
+test('withDateSuffix는 회의 시각을 제목 뒤에 붙인다', () => {
+  const at = new Date('2026-07-08T15:58:00').getTime()
+  expect(withDateSuffix('결제 일정 점검', at)).toBe('결제 일정 점검 (2026-07-08 15:58)')
 })

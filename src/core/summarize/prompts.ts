@@ -33,7 +33,7 @@ export function isDefaultTitle(title: string): boolean {
 
 const TITLE_INSTRUCTION = `이 회의는 아직 제목이 없다. 응답의 맨 첫 줄은 반드시 \`제목: \`로 시작하고, 전사문의 핵심 주제를 담은 구체적 제목(8~20자)을 쓴 뒤 빈 줄 하나를 두고 본문을 시작한다.
 - 좋은 예: \`제목: 결제 모듈 출시 일정 점검\`, \`제목: 테스트 데이터 작성 방안 논의\`
-- 금지: 날짜·시간·"회의"라는 단어만으로 된 제목 (예: "7월 8일 회의" 금지)`
+- 금지: 날짜·시간·"회의"라는 단어만으로 된 제목 (예: "7월 8일 회의" 금지). 날짜·시간은 앱이 제목 뒤에 자동으로 붙이므로 제목에 넣지 않는다.`
 
 export function buildSummaryPrompt(
   template: SummaryTemplate, meeting: Meeting, segments: TranscriptSegment[],
@@ -78,4 +78,11 @@ export function extractSuggestedTitle(markdown: string): { title: string | null;
     return { title, body: lines.slice(rest).join('\n') }
   }
   return { title: null, body: markdown }
+}
+
+// AI 제목 뒤에 회의 시각을 붙인다 — 예: '결제 일정 점검 (2026-07-08 15:58)'
+export function withDateSuffix(title: string, createdAt: number): string {
+  const d = new Date(createdAt)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${title} (${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())})`
 }
