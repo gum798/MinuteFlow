@@ -17,7 +17,7 @@ import { detectWebGPU, WhisperLocalEngine } from '../../core/stt/whisperLocal'
 import { DiarizeEngine } from '../../core/diarize/diarizeLocal'
 import { speakerColor } from '../../core/diarize/speakerColors'
 import { transcribeSamplesWithGroq } from '../../core/stt/groq'
-import { GROQ_ENABLED } from '../../core/features'
+import { GROQ_ENABLED, DOCX_ENABLED } from '../../core/features'
 
 // 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
 // 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
@@ -268,7 +268,9 @@ export default function MeetingPage() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 18 }}>
         <button className="btn btn-outline btn-sm" onClick={() => exportAs('md')}>Markdown 내보내기</button>
         <button className="btn btn-outline btn-sm" onClick={() => exportAs('txt')}>TXT 내보내기</button>
-        <button className="btn btn-outline btn-sm" onClick={() => void exportDocx()}>DOCX 내보내기</button>
+        {DOCX_ENABLED && (
+          <button className="btn btn-outline btn-sm" onClick={() => void exportDocx()}>DOCX 내보내기</button>
+        )}
         <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
         {audioAvailable && (
           <>
