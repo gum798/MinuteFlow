@@ -1,8 +1,9 @@
-import { useSyncExternalStore, useEffect, useState } from 'react'
+import { useSyncExternalStore, useEffect, useState, useRef } from 'react'
 import { NavLink, Link, Outlet } from 'react-router-dom'
 import { UndoToastProvider } from './UndoToast'
 import { subscribeRecording, getRecordingState } from '../core/recorder/session'
 import { formatTimestamp } from '../core/format'
+import { reloadPage } from '../core/reload'
 
 // 새 서비스 워커가 제어권을 잡으면(배포 반영) 화면은 아직 이전 버전 — 새로고침 유도
 function useUpdateReady(): boolean {
@@ -29,6 +30,15 @@ const NAV = [
 export default function AppShell() {
   const { phase, elapsedSec } = useSyncExternalStore(subscribeRecording, getRecordingState)
   const updateReady = useUpdateReady()
+  const reloadedRef = useRef(false)
+  // 새 버전이 준비되면(새 SW가 제어권 확보) 자동으로 새로고침해 최신 코드를 적용한다.
+  // 단, 녹음/종료 중에는 절대 새로고침하지 않는다(녹음 유실 방지) — 끝나서 idle이 되면 그때 적용된다.
+  useEffect(() => {
+    if (updateReady && phase === 'idle' && !reloadedRef.current) {
+      reloadedRef.current = true
+      reloadPage()
+    }
+  }, [updateReady, phase])
   const [pipelineMsg, setPipelineMsg] = useState<string | null>(null)
   useEffect(() => {
     document.body.classList.toggle('is-recording', phase !== 'idle')
@@ -57,9 +67,9 @@ export default function AppShell() {
       {pipelineMsg && (
         <div className="toast" role="status" onClick={() => setPipelineMsg(null)}>{pipelineMsg}</div>
       )}
-      {updateReady && phase === 'idle' && (
-        <button type="button" className="update-chip" onClick={() => window.location.reload()}>
-          새 버전이 있어요 — 탭해서 적용
+      {updateReady && phase !== 'idle' && (
+        <button type="button" className="update-chip" onClick={() => reloadPage()}>
+          새 버전 준비됨 — 녹음 끝나면 자동 적용돼요 (탭해서 지금 적용)
         </button>
       )}
       <div className="shell">
