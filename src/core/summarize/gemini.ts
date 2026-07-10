@@ -2,6 +2,9 @@
 // 첫 청크가 수 초 내 도착해 커넥션이 끊기지 않으므로 2시간+ 회의도 'Load failed' 없이 요약된다.
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse'
 const defaultSleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+// 일시적으로 재시도할 HTTP 상태(rate limit·서버 과부하). 최대 시도 횟수(첫 요청 + 재시도).
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+const MAX_ATTEMPTS = 4
 
 // fetch 자체가 throw(Safari 타임아웃 시 TypeError 'Load failed')하거나 스트림이 도중에 끊겼을 때의 안내.
 const NETWORK_MSG = '네트워크 응답이 지연됐어요. 요약할 내용이 매우 길 수 있어요 — 잠시 후 다시 시도하거나, 설정에서 분할 녹음을 켜서 회의를 나눠 요약해보세요.'
@@ -109,11 +112,15 @@ export async function summarizeWithGemini(
       throw new Error(NETWORK_MSG)
     }
   }
-  // 상태 판정은 body 스트림을 열기 전 res.status로 한다(429 재시도·HTTP 에러 구분).
+  // 일시적 서버 오류는 재시도한다: 429(rate limit)·500·502·503(과부하)·504.
+  // 429는 서버가 준 retryDelay를 우선 존중, 그 외는 지수 백오프(1s→2s→4s…, 상한 8s).
+  // 상태 판정은 body 스트림을 열기 전 res.status로 한다(재시도·HTTP 에러 구분).
+  const sleep = opts.sleep ?? defaultSleep
+  const backoffMs = (attempt: number) => Math.min(1000 * 2 ** (attempt - 1), 8000)
   let res = await send()
-  if (res.status === 429) {
+  for (let attempt = 1; RETRYABLE_STATUS.has(res.status) && attempt < MAX_ATTEMPTS; attempt++) {
     const body = (await res.json().catch(() => ({}))) as GeminiError
-    await (opts.sleep ?? defaultSleep)(parseRetryMs(body))
+    await sleep(res.status === 429 ? parseRetryMs(body) : backoffMs(attempt))
     res = await send()
   }
   if (!res.ok) {
@@ -123,6 +130,7 @@ export async function summarizeWithGemini(
       throw new Error('Gemini API 키를 확인해주세요. (설정에서 재등록)')
     if (res.status === 403) throw new Error('API 키 권한을 확인해주세요.')
     if (res.status === 429) throw new Error('무료 사용량을 잠시 초과했습니다. 잠시 후 다시 시도해주세요.')
+    if (res.status === 503) throw new Error('요약 서버가 잠시 혼잡합니다(503). 잠시 후 다시 시도해주세요.')
     throw new Error(`요약 요청 실패 (${res.status})`)
   }
   return readSseStream(res, opts.onDelta)

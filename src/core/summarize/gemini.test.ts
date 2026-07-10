@@ -73,6 +73,28 @@ test('429는 retryDelay만큼 대기 후 1회 재시도(스트리밍)', async ()
   expect(out).toBe('## 요약\n성공')
 })
 
+test('503(과부하)은 지수 백오프로 재시도하고 회복되면 요약을 반환한다', async () => {
+  const fetchFn = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE' } }), { status: 503 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE' } }), { status: 503 }))
+    .mockResolvedValueOnce(sseResponse([dataEvent('회복됨')]))
+  const sleeps: number[] = []
+  const out = await summarizeWithGemini('p', 'k', {
+    fetchFn: fetchFn as unknown as typeof fetch, sleep: async ms => { sleeps.push(ms) },
+  })
+  expect(fetchFn).toHaveBeenCalledTimes(3)
+  expect(sleeps).toEqual([1000, 2000]) // 첫 재시도 1s, 둘째 2s (지수 백오프)
+  expect(out).toBe('회복됨')
+})
+
+test('503이 재시도를 소진할 때까지 계속되면 503 안내로 실패한다', async () => {
+  const fetchFn = vi.fn(async () => new Response(JSON.stringify({ error: { code: 503 } }), { status: 503 }))
+  await expect(summarizeWithGemini('p', 'k', {
+    fetchFn: fetchFn as unknown as typeof fetch, sleep: async () => {},
+  })).rejects.toThrow(/503/)
+  expect(fetchFn).toHaveBeenCalledTimes(4) // 첫 요청 + 재시도 3회
+})
+
 test('candidates 없는 빈 스트림은 안전 필터 안내', async () => {
   const blocked = `data: ${JSON.stringify({ promptFeedback: { blockReason: 'SAFETY' } })}\n\n`
   const fetchFn = vi.fn(async () => sseResponse([blocked]))
