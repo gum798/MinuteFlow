@@ -76,6 +76,18 @@ export function getMeeting(id: string): Promise<Meeting | undefined> {
   return db.meetings.get(id)
 }
 
+/**
+ * 같은 분할 그룹(groupId 동일)의 모든 부를 partIndex(없으면 1) 오름차순으로 반환한다.
+ * 그룹 키는 `groupId ?? id`. 분할되지 않은 회의면 자기 자신 1개만. soft-deleted 부는 제외한다.
+ */
+export async function getMeetingGroup(meeting: Meeting): Promise<Meeting[]> {
+  const groupId = meeting.groupId ?? meeting.id
+  const parts = await db.meetings
+    .filter(m => !m.deletedAt && (m.groupId ?? m.id) === groupId)
+    .toArray()
+  return parts.sort((a, b) => (a.partIndex ?? 1) - (b.partIndex ?? 1))
+}
+
 export function getSegments(meetingId: string): Promise<TranscriptSegment[]> {
   return db.transcriptSegments.where('[meetingId+startSec]')
     .between([meetingId, -Infinity], [meetingId, Infinity]).toArray()

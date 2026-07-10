@@ -1,7 +1,7 @@
 import { db } from './db'
 import {
   createMeeting, appendAudioChunk, appendSegment, finishMeeting, markGroupFirstPart,
-  updateMeetingTitle, listMeetings, getMeeting, getSegments,
+  updateMeetingTitle, listMeetings, getMeeting, getMeetingGroup, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting, recoverOrphanAudio,
   createUploadMeeting, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames,
   softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
@@ -56,6 +56,27 @@ test('listMeetings는 createdAt 내림차순', async () => {
   await db.meetings.update(b.id, { createdAt: 2000 })
   const list = await listMeetings()
   expect(list.map(m => m.id)).toEqual([b.id, a.id])
+})
+
+test('getMeetingGroup은 같은 그룹의 모든 부를 partIndex 오름차순으로 반환한다', async () => {
+  const first = await createMeeting()
+  await markGroupFirstPart(first.id, first.id, first.title, ' (1부)')
+  const p3 = await createMeeting('ko-KR', { groupId: first.id, partIndex: 3 })
+  const p2 = await createMeeting('ko-KR', { groupId: first.id, partIndex: 2 })
+  // soft-deleted 부는 그룹에서 제외된다
+  const gone = await createMeeting('ko-KR', { groupId: first.id, partIndex: 4 })
+  await softDeleteMeeting(gone.id)
+
+  const group = await getMeetingGroup(p3)
+  expect(group.map(m => m.id)).toEqual([first.id, p2.id, p3.id])
+})
+
+test('getMeetingGroup은 미분할 회의면 자기 자신 1개만 반환한다', async () => {
+  const solo = await createMeeting()
+  const other = await createMeeting()
+  await finishMeeting(other.id, 60)
+  const group = await getMeetingGroup(solo)
+  expect(group.map(m => m.id)).toEqual([solo.id])
 })
 
 test('오디오 청크는 seq순으로 연결되어 하나의 Blob이 된다', async () => {

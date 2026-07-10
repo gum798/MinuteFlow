@@ -11,6 +11,26 @@ import { ensurePersistentStorage, getStorageBreakdown } from '../../core/store/s
 import { formatTimestamp } from '../../core/format'
 import { useUndoToast, UNDO_MS } from '../UndoToast'
 
+/**
+ * 분할 회의를 그룹(groupId ?? id)으로 묶어 대표(마지막 부)와 전체 부 목록을 만든다.
+ * 대표 = partIndex 최대인 부(통합 요약·AI 제목이 거기 붙는다). 미분할 회의는 자기 자신이 대표.
+ * 대표 createdAt 내림차순으로 정렬해 listMeetings의 최신순을 유지한다.
+ */
+function groupRepresentatives(meetings: Meeting[]): { rep: Meeting; parts: Meeting[] }[] {
+  const groups = new Map<string, Meeting[]>()
+  for (const m of meetings) {
+    const key = m.groupId ?? m.id
+    const arr = groups.get(key)
+    if (arr) arr.push(m)
+    else groups.set(key, [m])
+  }
+  const result = [...groups.values()].map(parts => {
+    const sorted = [...parts].sort((a, b) => (a.partIndex ?? 1) - (b.partIndex ?? 1))
+    return { rep: sorted[sorted.length - 1], parts: sorted }
+  })
+  return result.sort((a, b) => b.rep.createdAt - a.rep.createdAt)
+}
+
 export default function Home() {
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [interrupted, setInterrupted] = useState<Meeting[]>([])
@@ -55,7 +75,8 @@ export default function Home() {
     })
   }
 
-  const done = meetings.filter(m => m.status === 'done')
+  // 분할 회의는 그룹당 대표(마지막 부) 1개만 카드로 노출한다.
+  const done = groupRepresentatives(meetings).filter(g => g.rep.status === 'done')
 
   return (
     <div>
@@ -86,7 +107,7 @@ export default function Home() {
         <p className="sub">아직 회의록이 없습니다. 녹음을 시작해보세요.</p>
       ) : (
         <div className="card-grid">
-          {done.map(m => (
+          {done.map(({ rep: m, parts }) => (
             <div
               key={m.id}
               className="card hoverable"
@@ -94,9 +115,13 @@ export default function Home() {
               onClick={() => navigate(`/meeting/${m.id}`)}
             >
               <div className="row" style={{ marginBottom: 8 }}>
-                <Link to={`/meeting/${m.id}`} onClick={e => e.stopPropagation()}>{m.title}</Link>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <Link to={`/meeting/${m.id}`} onClick={e => e.stopPropagation()}>{m.title}</Link>
+                  {parts.length > 1 && <span className="badge badge-gray">{parts.length}개 부</span>}
+                </div>
                 {(() => {
-                  const job = jobs.find(j => j.meetingId === m.id)
+                  // 그룹 내 어느 부라도 작업 중이면 진행 배지를 보여준다.
+                  const job = jobs.find(j => parts.some(p => p.id === j.meetingId))
                   return job
                     ? <span className="badge badge-accent"><span className="dot" />{JOB_LABELS[job.kind]}</span>
                     : <span className="badge badge-ok">확정</span>

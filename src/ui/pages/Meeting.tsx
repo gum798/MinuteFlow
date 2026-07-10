@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, getSummaries, replaceSegments } from '../../core/store/meetings'
+import { getMeeting, getMeetingGroup, getSegments, getMeetingAudio, updateMeetingTitle, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, getSummaries, replaceSegments } from '../../core/store/meetings'
 import { subscribeJobs, getJobs, type JobDoneDetail } from '../../core/jobs'
 import { useUndoToast } from '../UndoToast'
 import { Markdown } from '../Markdown'
@@ -22,6 +22,8 @@ export default function MeetingPage() {
   const navigate = useNavigate()
   const showUndoToast = useUndoToast()
   const [meeting, setMeeting] = useState<Meeting | null | undefined>(undefined)
+  // 같은 분할 그룹의 모든 부(partIndex 오름차순). 2개 이상이면 부 탭을 띄운다.
+  const [group, setGroup] = useState<Meeting[]>([])
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [title, setTitle] = useState('')
   const [audioAvailable, setAudioAvailable] = useState(false)
@@ -44,9 +46,12 @@ export default function MeetingPage() {
       setMeeting(m ?? null)
       if (m) {
         setTitle(m.title)
+        setGroup(await getMeetingGroup(m))
         setSegments((await getSegments(id)).filter(s => s.isFinal))
         setAudioAvailable((await getMeetingAudio(id)) !== null)
         setSummaries(await getSummaries(id))
+      } else {
+        setGroup([])
       }
     })()
   }, [id])
@@ -240,6 +245,20 @@ export default function MeetingPage() {
           </span>
         )}
       </div>
+      {group.length > 1 && (
+        <div className="row" style={{ justifyContent: 'flex-start', gap: 6, margin: '0 0 16px', flexWrap: 'wrap' }}>
+          {group.map(p => (
+            <button
+              key={p.id}
+              type="button"
+              className={`btn btn-sm ${p.id === meeting.id ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => navigate(`/meeting/${p.id}`)}
+            >
+              {p.partIndex ?? 1}부
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         {audioAvailable && (
           <button className="btn btn-primary btn-sm" disabled={job !== null} onClick={() => void autoProcess()}>
@@ -297,6 +316,12 @@ export default function MeetingPage() {
             )}
           </div>
         </details>
+      )}
+      {group.length > 1 && summaries.length === 0 && meeting.id !== group[group.length - 1].id && (
+        <p className="sub">
+          통합 요약은 마지막 부에 있어요.{' '}
+          <Link to={`/meeting/${group[group.length - 1].id}`}>마지막 부로 이동</Link>
+        </p>
       )}
       {summaries.map(s => (
         <section key={s.id} className="card" style={{ marginBottom: 12 }}>

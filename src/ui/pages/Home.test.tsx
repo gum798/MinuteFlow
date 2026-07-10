@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HashRouter } from 'react-router-dom'
 import { db } from '../../core/store/db'
-import { createMeeting, finishMeeting, updateMeetingTitle, listMeetings } from '../../core/store/meetings'
+import { createMeeting, finishMeeting, updateMeetingTitle, listMeetings, markGroupFirstPart } from '../../core/store/meetings'
 import { UndoToastProvider } from '../UndoToast'
 import Home from './Home'
 
@@ -127,6 +127,31 @@ test('연속 삭제: A 삭제 직후 B 삭제해도 B의 실행취소는 유효�
 
   // A는 확정 하드 삭제되어 DB에서도 사라진다
   await waitFor(async () => expect(await db.meetings.get(a.id)).toBeUndefined())
+})
+
+test('분할 그룹은 카드 1개로 합쳐 보이고 부 개수를 표시하며 클릭 시 마지막 부로 이동한다', async () => {
+  window.location.hash = ''
+  const p1 = await createMeeting()
+  await markGroupFirstPart(p1.id, p1.id, p1.title, ' (1부)')
+  await finishMeeting(p1.id, 30)
+  const p2 = await createMeeting('ko-KR', { groupId: p1.id, partIndex: 2, titleSuffix: ' (2부)' })
+  await finishMeeting(p2.id, 30)
+  const p3 = await createMeeting('ko-KR', { groupId: p1.id, partIndex: 3, titleSuffix: ' (3부)' })
+  await updateMeetingTitle(p3.id, '통합 회의 제목') // 마지막 부에 통합 AI 제목
+  await finishMeeting(p3.id, 30)
+
+  const { container } = renderHome()
+  await waitFor(() => expect(screen.getByText('통합 회의 제목')).toBeInTheDocument())
+  // 그룹은 대표(마지막 부) 카드 1개만 — 개별 부 제목은 노출되지 않는다
+  expect(container.querySelectorAll('.card.hoverable')).toHaveLength(1)
+  expect(screen.queryByText(/\(1부\)/)).not.toBeInTheDocument()
+  expect(screen.getByText('3개 부')).toBeInTheDocument()
+
+  // 클릭 시 마지막 부(p3) 회의록으로 이동한다
+  const card = screen.getByText('통합 회의 제목').closest('.card')!
+  await userEvent.click(card.querySelector('.muted')!)
+  await waitFor(() => expect(window.location.hash).toContain(`/meeting/${p3.id}`))
+  window.location.hash = ''
 })
 
 test('카드 아무 곳이나 클릭하면 회의록으로 이동한다', async () => {
