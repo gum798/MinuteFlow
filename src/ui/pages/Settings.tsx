@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { loadSettings, saveSettings, type WhisperModelId } from '../../core/settings'
+import { upsertCorrection, type Correction } from '../../core/corrections'
 import { detectWebGPU } from '../../core/stt/whisperLocal'
 import { GROQ_ENABLED } from '../../core/features'
 import { getStorageBreakdown, clearModelCaches, type StorageBreakdown } from '../../core/store/storage'
@@ -20,6 +21,8 @@ export default function Settings() {
   const [toast, setToast] = useState(false)
   const [storage, setStorage] = useState<StorageBreakdown | null>(null)
   const [cacheToast, setCacheToast] = useState(false)
+  const [newFrom, setNewFrom] = useState('')
+  const [newTo, setNewTo] = useState('')
 
   useEffect(() => { void detectWebGPU().then(setWebgpu) }, [])
   useEffect(() => { void getStorageBreakdown().then(setStorage) }, [])
@@ -36,6 +39,21 @@ export default function Settings() {
     setStorage(await getStorageBreakdown())
     setCacheToast(true)
     setTimeout(() => setCacheToast(false), 2000)
+  }
+
+  // 보정 사전은 즉시 저장한다(별도 저장 버튼 불필요). form도 함께 갱신해 메인 저장과 어긋나지 않게 한다.
+  function commitCorrections(next: Correction[]) {
+    setForm(f => ({ ...f, corrections: next }))
+    saveSettings({ corrections: next })
+  }
+
+  function addCorrection() {
+    commitCorrections(upsertCorrection(form.corrections, newFrom.trim(), newTo.trim()))
+    setNewFrom(''); setNewTo('')
+  }
+
+  function removeCorrection(index: number) {
+    commitCorrections(form.corrections.filter((_, i) => i !== index))
   }
 
   return (
@@ -118,6 +136,32 @@ export default function Settings() {
           </select>
         </div>
         <p className="hint" style={{ marginTop: 8 }}>간격을 넘기면 대화가 없는 순간에 자동으로 나눠 저장하고, 모두 끝나면 통합 요약해요.</p>
+      </section>
+
+      <section className="card" style={{ marginTop: 22 }}>
+        <h2>단어 보정</h2>
+        <p className="hint">자주 틀리게 전사되는 단어를 등록하면 전사할 때 자동으로 바꿔줘요. 전사문에서 단어를 드래그해 바로 등록할 수도 있어요.</p>
+        {form.corrections.length === 0 ? (
+          <p className="muted" style={{ marginTop: 10 }}>등록된 보정이 없어요.</p>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 0' }}>
+            {form.corrections.map((c, i) => (
+              <li key={`${c.from}-${i}`} className="row" style={{ justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                <span><code>{c.from}</code> → <code>{c.to}</code></span>
+                <button type="button" className="btn btn-ghost btn-sm" aria-label={`${c.from} 보정 삭제`}
+                  style={{ color: 'var(--warn-fg)' }} onClick={() => removeCorrection(i)}>삭제</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="row" style={{ gap: 8, marginTop: 12 }}>
+          <input className="input" aria-label="보정 전 단어" placeholder="틀린 단어"
+            value={newFrom} onChange={e => setNewFrom(e.target.value)} />
+          <span aria-hidden="true">→</span>
+          <input className="input" aria-label="보정 후 단어" placeholder="올바른 단어"
+            value={newTo} onChange={e => setNewTo(e.target.value)} />
+          <button type="button" className="btn btn-outline btn-sm" onClick={addCorrection}>추가</button>
+        </div>
       </section>
 
       <details className="advanced" style={{ marginTop: 16 }}>

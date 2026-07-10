@@ -5,8 +5,14 @@ beforeEach(() => localStorage.clear())
 test('저장된 값이 없으면 기본값', () => {
   expect(loadSettings()).toEqual({
     groqApiKey: '', whisperModel: 'onnx-community/whisper-large-v3-turbo', language: 'ko',
-    geminiApiKey: '', autoPipeline: true, splitMinutes: 60,
+    geminiApiKey: '', autoPipeline: true, splitMinutes: 60, corrections: [],
   })
+})
+
+test('corrections 기본값은 []이고 저장·복원된다', () => {
+  expect(loadSettings().corrections).toEqual([])
+  saveSettings({ corrections: [{ from: '머신런닝', to: '머신러닝' }] })
+  expect(loadSettings().corrections).toEqual([{ from: '머신런닝', to: '머신러닝' }])
 })
 
 test('splitMinutes 기본값은 60이고 0(끄기)으로 저장된다', () => {

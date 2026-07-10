@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { db } from '../../core/store/db'
 import { createMeeting, finishMeeting, appendSegment, appendAudioChunk, listMeetings, saveSummary } from '../../core/store/meetings'
-import { saveSettings } from '../../core/settings'
+import { saveSettings, loadSettings } from '../../core/settings'
 import AppShell from '../AppShell'
 import Home from './Home'
 import MeetingPage from './Meeting'
@@ -237,6 +237,37 @@ test('저장된 요약이 마운트 시 로드되어 보인다', async () => {
   renderPage(m.id)
   await waitFor(() => expect(screen.getByText(/저장된 요약/)).toBeInTheDocument())
   expect(screen.getByText('회의록', { selector: '.badge' })).toBeInTheDocument() // 템플릿 라벨 배지
+})
+
+test('전사문에서 단어를 선택해 보정하면 세그먼트와 설정 사전에 반영된다', async () => {
+  const m = await seed() // '오늘 회의를 시작하겠습니다'
+  const selMock = { toString: () => '회의' } as unknown as Selection
+  vi.spyOn(window, 'getSelection').mockReturnValue(selMock)
+  vi.spyOn(window, 'prompt').mockReturnValue('미팅')
+  renderPage(m.id)
+  const seg = await screen.findByText(/오늘 회의를 시작하겠습니다/)
+  // 전사 카드에서 마우스 선택 → 보정 바 노출
+  fireEvent.mouseUp(seg)
+  await userEvent.click(await screen.findByRole('button', { name: /'회의' 보정하기/ }))
+  // 세그먼트 텍스트가 교체되고 설정 사전에 등록된다
+  await waitFor(() => expect(screen.getByText(/오늘 미팅를 시작하겠습니다/)).toBeInTheDocument())
+  await waitFor(() => expect(loadSettings().corrections).toEqual([{ from: '회의', to: '미팅' }]))
+  expect((await db.transcriptSegments.where('meetingId').equals(m.id).toArray())[0].text)
+    .toBe('오늘 미팅를 시작하겠습니다')
+  vi.restoreAllMocks()
+})
+
+test('보정 바에서 닫기를 누르면 보정하지 않고 바가 사라진다', async () => {
+  const m = await seed()
+  vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => '회의' } as unknown as Selection)
+  const promptSpy = vi.spyOn(window, 'prompt')
+  renderPage(m.id)
+  const seg = await screen.findByText(/오늘 회의를 시작하겠습니다/)
+  fireEvent.mouseUp(seg)
+  await userEvent.click(await screen.findByRole('button', { name: '닫기' }))
+  expect(screen.queryByRole('button', { name: /보정하기/ })).not.toBeInTheDocument()
+  expect(promptSpy).not.toHaveBeenCalled()
+  vi.restoreAllMocks()
 })
 
 test('화자 구분 진행 중 페이지를 떠났다 돌아와도 진행 문구가 유지되고 완료 후 배지가 갱신된다', async () => {

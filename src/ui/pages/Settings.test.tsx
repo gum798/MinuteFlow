@@ -77,6 +77,25 @@ test('분할 간격을 바꿔 저장하면 splitMinutes가 반영된다', async 
   await waitFor(() => expect(loadSettings().splitMinutes).toBe(30))
 })
 
+test('단어 보정을 추가하면 목록에 뜨고 즉시 저장되며, 삭제하면 사라진다', async () => {
+  renderPage()
+  await userEvent.type(screen.getByLabelText('보정 전 단어'), '머신런닝')
+  await userEvent.type(screen.getByLabelText('보정 후 단어'), '머신러닝')
+  await userEvent.click(screen.getByRole('button', { name: '추가' }))
+  // 목록에 노출 + 즉시 저장(별도 저장 버튼 불필요)
+  expect(screen.getByText('머신런닝')).toBeInTheDocument()
+  await waitFor(() => expect(loadSettings().corrections).toEqual([{ from: '머신런닝', to: '머신러닝' }]))
+  // 삭제 → 목록·설정에서 제거
+  await userEvent.click(screen.getByRole('button', { name: /머신런닝 보정 삭제/ }))
+  await waitFor(() => expect(loadSettings().corrections).toEqual([]))
+  expect(screen.queryByText('머신런닝')).not.toBeInTheDocument()
+})
+
+test('등록된 보정이 없으면 안내문을 보여준다', () => {
+  renderPage()
+  expect(screen.getByText(/등록된 보정이 없어요/)).toBeInTheDocument()
+})
+
 test('AI 모델 캐시 비우기를 누르면 캐시를 지우고 다시 로드한다', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   renderPage()

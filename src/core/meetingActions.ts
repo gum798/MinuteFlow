@@ -6,6 +6,7 @@
 import { getMeetingAudio, getMeeting, getSegments, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames, saveSummary, updateMeetingTitle } from './store/meetings'
 import { runJob } from './jobs'
 import { loadSettings } from './settings'
+import { applyCorrections } from './corrections'
 import { decodeTo16kMono } from './audio/decode'
 import { repairHeaderlessWebm } from './audio/webmRepair'
 import { detectWebGPU, WhisperLocalEngine } from './stt/whisperLocal'
@@ -108,7 +109,10 @@ export async function retranscribeMeeting(meetingId: string): Promise<'done' | '
     // 무의미 조각('-', 공백)을 먼저 걸러 반복이 이어지게 한 뒤 환각("지금 지금…")을 제거한다.
     const meaningful = dropHallucinatedRepeats(segs.filter(s => isMeaningfulText(s.text)))
     if (meaningful.length === 0) { result = 'empty'; return } // 빈/무의미 결과 — 기존 전사 보존
-    await replaceSegments(meetingId, meaningful.map(s => ({ ...s, source, isFinal: true })))
+    // 등록된 보정 사전을 전사 출력에 자동 적용해 반복 오전사를 교정한다.
+    await replaceSegments(meetingId, meaningful.map(s => ({
+      ...s, text: applyCorrections(s.text, settings.corrections), source, isFinal: true,
+    })))
     // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름 오염 방지.
     await updateSpeakerNames(meetingId, {})
     result = 'done'

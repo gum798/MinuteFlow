@@ -1,13 +1,14 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
-import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, getSummaries } from '../../core/store/meetings'
+import { getMeeting, getSegments, getMeetingAudio, updateMeetingTitle, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, getSummaries, replaceSegments } from '../../core/store/meetings'
 import { subscribeJobs, getJobs, type JobDoneDetail } from '../../core/jobs'
 import { useUndoToast } from '../UndoToast'
 import { Markdown } from '../Markdown'
 import { toMarkdown, toPlainText, exportFilename, downloadBlob } from '../../core/export/exporters'
 import { formatTimestamp } from '../../core/format'
-import { loadSettings } from '../../core/settings'
+import { loadSettings, saveSettings } from '../../core/settings'
+import { applyCorrections, upsertCorrection } from '../../core/corrections'
 import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
 import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, hasMeaningfulTranscript } from '../../core/meetingActions'
 import { enqueue } from '../../core/pipeline'
@@ -26,6 +27,9 @@ export default function MeetingPage() {
   const [summaries, setSummaries] = useState<Summary[]>([])
   const [template, setTemplate] = useState<SummaryTemplate>('minutes')
   const [copyToast, setCopyToast] = useState(false)
+  // 전사문에서 드래그로 선택한 단어(1~40자). 값이 있으면 하단 보정 바를 띄운다.
+  const [selectedWord, setSelectedWord] = useState<string | null>(null)
+  const [correctToast, setCorrectToast] = useState(false)
   // 재전사·화자 구분·요약은 전역 작업 스토어에 산다 → 페이지를 떠났다 와도 진행 상태가 유지된다.
   const jobs = useSyncExternalStore(subscribeJobs, getJobs)
 
@@ -159,6 +163,31 @@ export default function MeetingPage() {
     await updateSpeakerNames(meeting.id, names)
   }
 
+  // 전사 카드에서 마우스 선택이 끝나면 선택 단어를 읽어 보정 바를 띄운다(1~40자만).
+  function onTranscriptMouseUp() {
+    const sel = window.getSelection()?.toString().trim() ?? ''
+    if (sel.length >= 1 && sel.length <= 40) setSelectedWord(sel)
+  }
+
+  // 선택 단어를 사용자가 입력한 표기로 교정한다.
+  // 1) 이 회의 모든 세그먼트에 즉시 적용(speaker 등 보존) 2) 설정 사전에 등록해 이후 전사에도 자동 반영.
+  async function correctSelected() {
+    if (!meeting || !selectedWord) return
+    const from = selectedWord
+    const input = window.prompt('올바른 단어로 바꿔주세요', from)
+    const to = input?.trim() ?? ''
+    if (!to || to === from) { setSelectedWord(null); return }
+    // getSegments 결과(id·meetingId·speaker 포함)를 그대로 text만 치환해 다시 저장 → speaker 보존.
+    const current = await getSegments(meeting.id)
+    const corrected = current.map(s => ({ ...s, text: applyCorrections(s.text, [{ from, to }]) }))
+    await replaceSegments(meeting.id, corrected)
+    setSegments(corrected.filter(s => s.isFinal))
+    saveSettings({ corrections: upsertCorrection(loadSettings().corrections, from, to) })
+    setSelectedWord(null)
+    setCorrectToast(true)
+    setTimeout(() => setCorrectToast(false), 2000)
+  }
+
   async function removeMeeting() {
     if (!meeting) return
     if (getRecordingState().meetingId === meeting.id) {
@@ -266,7 +295,7 @@ export default function MeetingPage() {
             : '전사된 내용이 없습니다.'}
         </p>
       ) : (
-        <section className="card">
+        <section className="card" onMouseUp={onTranscriptMouseUp}>
           {segments.map(s => {
             const color = s.speaker ? speakerColor(s.speaker) : null
             return (
@@ -288,6 +317,15 @@ export default function MeetingPage() {
         </section>
       )}
       {copyToast && <div className="toast">복사했어요! AI 채팅에 붙여넣어 주세요.</div>}
+      {selectedWord && (
+        <div className="toast">
+          <button type="button" className="toast-action" style={{ marginLeft: 0 }} onClick={() => void correctSelected()}>
+            {`'${selectedWord}' 보정하기`}
+          </button>
+          <button type="button" className="toast-action" aria-label="닫기" onClick={() => setSelectedWord(null)}>×</button>
+        </div>
+      )}
+      {correctToast && <div className="toast">보정했어요 · 앞으로 자동으로 반영됩니다</div>}
     </div>
   )
 }
