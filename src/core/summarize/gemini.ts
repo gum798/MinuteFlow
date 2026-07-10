@@ -89,6 +89,8 @@ async function readSseStream(res: Response, onDelta?: (accumulated: string) => v
   } catch {
     if (accumulated) return accumulated
     throw new Error(NETWORK_MSG)
+  } finally {
+    void reader.cancel().catch(() => {}) // 조기 종료·중단 시 커넥션 해제 (정상 종료면 no-op)
   }
   if (!accumulated) throw new Error(SAFETY_MSG)
   return accumulated
@@ -110,7 +112,7 @@ export async function summarizeWithGemini(
   // 상태 판정은 body 스트림을 열기 전 res.status로 한다(429 재시도·HTTP 에러 구분).
   let res = await send()
   if (res.status === 429) {
-    const body = (await res.json()) as GeminiError
+    const body = (await res.json().catch(() => ({}))) as GeminiError
     await (opts.sleep ?? defaultSleep)(parseRetryMs(body))
     res = await send()
   }
