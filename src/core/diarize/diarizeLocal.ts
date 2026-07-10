@@ -5,6 +5,7 @@ type WorkerOut =
   | { status: 'progress'; file: string; progress: number }
   | { status: 'info'; message: string }
   | { status: 'done'; regions: SpeakerRegion[] }
+  | { status: 'extracted'; targets: { start: number; end: number }[]; embeddings: Float32Array[] }
   | { status: 'error'; message: string }
 
 function defaultCreateWorker(): Worker {
@@ -43,6 +44,28 @@ export class DiarizeEngine {
         }
       }
       worker.postMessage({ type: 'diarize', audio })
+    })
+  }
+
+  extract(
+    audio: Float32Array,
+    onProgress?: (p: WhisperProgress) => void,
+  ): Promise<{ targets: { start: number; end: number }[]; embeddings: Float32Array[] }> {
+    if (this.busy) return Promise.reject(new Error('이미 화자 분석이 진행 중입니다.'))
+    this.busy = true
+    this.worker ??= this.createWorker()
+    const worker = this.worker
+    return new Promise((resolve, reject) => {
+      this.activeReject = reject
+      const settle = () => { this.busy = false; this.activeReject = null; worker.onmessage = null }
+      worker.onmessage = (ev: MessageEvent<WorkerOut>) => {
+        const msg = ev.data
+        if (msg.status === 'progress') onProgress?.({ kind: 'download', file: msg.file, progress: msg.progress })
+        else if (msg.status === 'info') onProgress?.({ kind: 'status', message: msg.message })
+        else if (msg.status === 'extracted') { settle(); resolve({ targets: msg.targets, embeddings: msg.embeddings }) }
+        else if (msg.status === 'error') { settle(); reject(new Error(msg.message)) }
+      }
+      worker.postMessage({ type: 'extract', audio })
     })
   }
 
