@@ -216,6 +216,7 @@ a { color: var(--accent); text-decoration: none; }
 .badge {
   display: inline-flex; align-items: center; gap: 6px; border-radius: 999px;
   padding: 3px 10px; font-size: 12px; font-weight: 700;
+  white-space: nowrap; flex-shrink: 0; /* 긴 제목 옆에서도 세로로 꺾이지 않게 */
 }
 .badge .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; animation: pulseDot 1.2s infinite; }
 .badge-accent { background: var(--accent-soft); color: var(--accent); }
