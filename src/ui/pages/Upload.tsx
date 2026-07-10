@@ -6,7 +6,7 @@ import { decodeTo16kMono } from '../../core/audio/decode'
 import { detectWebGPU, WhisperLocalEngine, type WhisperProgress } from '../../core/stt/whisperLocal'
 import { transcribeBlobWithGroq, transcribeSamplesWithGroq, GROQ_FILE_LIMIT } from '../../core/stt/groq'
 import { createUploadMeeting, replaceSegments, finishMeeting } from '../../core/store/meetings'
-import { isMeaningfulText } from '../../core/meetingActions'
+import { isMeaningfulText, dropHallucinatedRepeats } from '../../core/meetingActions'
 import type { DraftSegment } from '../../core/stt/types'
 
 type Engine = 'whisper' | 'groq'
@@ -72,7 +72,7 @@ export default function Upload() {
 
       setStage('저장 중…')
       // 무의미한 조각('-', 공백 등)은 걸러 저장한다 — 전부 걸러지면 0개로 저장되어 빈 상태 UI가 안내한다.
-      await replaceSegments(meetingId, segs.filter(s => isMeaningfulText(s.text)).map(s => ({
+      await replaceSegments(meetingId, dropHallucinatedRepeats(segs).filter(s => isMeaningfulText(s.text)).map(s => ({
         ...s, source: engine, isFinal: true,
       })))
       await finishMeeting(meetingId, durationSec)

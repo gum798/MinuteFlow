@@ -10,6 +10,7 @@ import { formatTimestamp } from '../../core/format'
 import { loadSettings } from '../../core/settings'
 import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
 import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, hasMeaningfulTranscript } from '../../core/meetingActions'
+import { enqueue } from '../../core/pipeline'
 import { getRecordingState } from '../../core/recorder/session'
 import { speakerColor } from '../../core/diarize/speakerColors'
 import { GROQ_ENABLED, DOCX_ENABLED } from '../../core/features'
@@ -119,6 +120,20 @@ export default function MeetingPage() {
     downloadBlob(exportFilename(meeting, ext), blob)
   }
 
+  // 재전사 → 화자 구분 → AI 요약(키 있을 때)을 한 번에. 각 단계는 전역 잡으로 진행 표시되고,
+  // 결과 재로드는 job-done 리스너가 담당. 전역 큐(enqueue)로 백그라운드 파이프라인과 직렬화된다.
+  async function autoProcess() {
+    if (!meeting) return
+    if (segments.length > 0 && !window.confirm('기존 전사를 새 결과로 교체하고 화자 구분·요약까지 진행할까요?')) return
+    const id = meeting.id
+    await enqueue(async () => {
+      const r = await retranscribeMeeting(id)
+      if (r === 'no-audio') return
+      await diarizeMeeting(id)
+      if (loadSettings().geminiApiKey.trim()) await summarizeMeeting(id, template)
+    })
+  }
+
   async function retranscribe() {
     if (!meeting || !window.confirm('기존 전사를 새 결과로 교체할까요?')) return
     // 성공 시 세그먼트·이름맵 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
@@ -180,52 +195,64 @@ export default function MeetingPage() {
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 18 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+        {audioAvailable && (
+          <button className="btn btn-primary btn-sm" disabled={job !== null} onClick={() => void autoProcess()}>
+            {job ? (job.status || '정리 중…') : '✨ 자동 정리'}
+          </button>
+        )}
         <button className="btn btn-outline btn-sm" onClick={() => exportAs('md')}>Markdown 내보내기</button>
         <button className="btn btn-outline btn-sm" onClick={() => exportAs('txt')}>TXT 내보내기</button>
         {DOCX_ENABLED && (
           <button className="btn btn-outline btn-sm" onClick={() => void exportDocx()}>DOCX 내보내기</button>
         )}
         <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
-        {audioAvailable && (
-          <>
-            <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void retranscribe()}>
-              {job?.kind === 'retranscribe' ? job.status : '고품질 재전사'}
-            </button>
-            {segments.length > 0 && (
-              <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void diarize()}>
-                {job?.kind === 'diarize' ? job.status : '화자 구분'}
-              </button>
-            )}
-            <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
-          </>
-        )}
-        {hasMeaningfulTranscript(segments) && (
-          <>
-            <select
-              className="input"
-              style={{ width: 'auto' }}
-              aria-label="요약 템플릿"
-              value={template}
-              onChange={e => setTemplate(e.target.value as SummaryTemplate)}
-            >
-              {(Object.keys(TEMPLATE_LABELS) as SummaryTemplate[]).map(t => (
-                <option key={t} value={t}>{TEMPLATE_LABELS[t]}</option>
-              ))}
-            </select>
-            {loadSettings().geminiApiKey.trim()
-              ? (
-                <button className="btn btn-primary btn-sm" disabled={job !== null} onClick={() => void runSummarize()}>
-                  {job?.kind === 'summarize' ? (job.status || '요약 중…') : 'AI 요약'}
-                </button>
-              )
-              : (
-                <button className="btn btn-outline btn-sm" onClick={() => void copyPrompt()}>AI 프롬프트 복사</button>
-              )}
-          </>
-        )}
         <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} disabled={job !== null} onClick={() => void removeMeeting()}>삭제</button>
       </div>
+      {(audioAvailable || hasMeaningfulTranscript(segments)) && (
+        <details className="advanced" style={{ marginBottom: 18 }}>
+          <summary>개별 실행 (재전사·화자 구분·요약 따로)</summary>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            {audioAvailable && (
+              <>
+                <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void retranscribe()}>
+                  {job?.kind === 'retranscribe' ? job.status : '고품질 재전사'}
+                </button>
+                {segments.length > 0 && (
+                  <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void diarize()}>
+                    {job?.kind === 'diarize' ? job.status : '화자 구분'}
+                  </button>
+                )}
+                <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
+              </>
+            )}
+            {hasMeaningfulTranscript(segments) && (
+              <>
+                <select
+                  className="input"
+                  style={{ width: 'auto' }}
+                  aria-label="요약 템플릿"
+                  value={template}
+                  onChange={e => setTemplate(e.target.value as SummaryTemplate)}
+                >
+                  {(Object.keys(TEMPLATE_LABELS) as SummaryTemplate[]).map(t => (
+                    <option key={t} value={t}>{TEMPLATE_LABELS[t]}</option>
+                  ))}
+                </select>
+                {loadSettings().geminiApiKey.trim()
+                  ? (
+                    <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void runSummarize()}>
+                      {job?.kind === 'summarize' ? (job.status || '요약 중…') : 'AI 요약'}
+                    </button>
+                  )
+                  : (
+                    <button className="btn btn-outline btn-sm" onClick={() => void copyPrompt()}>AI 프롬프트 복사</button>
+                  )}
+              </>
+            )}
+          </div>
+        </details>
+      )}
       {summaries.map(s => (
         <section key={s.id} className="card" style={{ marginBottom: 12 }}>
           <span className="badge badge-accent">{TEMPLATE_LABELS[s.template]}</span>

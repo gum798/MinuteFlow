@@ -30,6 +30,33 @@ export function hasMeaningfulTranscript(segments: { text: string }[], minChars =
   return chars >= minChars
 }
 
+// Whisper는 무음·잡음 구간에서 같은 짧은 문구를 규칙적으로 반복 출력하는 환각을 낸다("지금 지금 지금…").
+// 정규화한 텍스트가 직전과 같은 짧은(≤6자) 조각이 REPEAT_RUN회 이상 연달아 나오면 그 연속을 통째로 제거한다.
+// 실제 대화의 자연스러운 반복(예: "네 네")까지 지우지 않도록 임계를 보수적으로(4회) 둔다.
+const REPEAT_RUN = 4
+const SHORT_LEN = 6
+const norm = (t: string): string => t.replace(MEANINGLESS_RE, '')
+
+export function dropHallucinatedRepeats<T extends { text: string }>(segments: T[]): T[] {
+  const out: T[] = []
+  let i = 0
+  while (i < segments.length) {
+    const key = norm(segments[i].text)
+    // 같은 정규화 텍스트가 몇 개 연속인지 센다.
+    let j = i + 1
+    while (j < segments.length && norm(segments[j].text) === key) j++
+    const runLen = j - i
+    // 짧은 조각이 4회 이상 반복 → 환각으로 보고 전부 버린다. 그 외에는 보존.
+    if (key.length > 0 && key.length <= SHORT_LEN && runLen >= REPEAT_RUN) {
+      i = j
+      continue
+    }
+    for (let k = i; k < j; k++) out.push(segments[k])
+    i = j
+  }
+  return out
+}
+
 // 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
 // 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
 async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Promise<Float32Array> {
@@ -78,8 +105,8 @@ export async function retranscribeMeeting(meetingId: string): Promise<'done' | '
         }, p => { if (p.kind === 'status') setStatus(p.message) })
       } finally { eng.dispose() }
     }
-    // 무의미한 조각('-', 공백 등)은 걸러 저장한다 — 무음 녹음이 '-' 한 조각으로 남는 걸 방지.
-    const meaningful = segs.filter(s => isMeaningfulText(s.text))
+    // 반복 환각("지금 지금 지금…")을 먼저 제거하고, 무의미한 조각('-', 공백 등)도 걸러 저장한다.
+    const meaningful = dropHallucinatedRepeats(segs).filter(s => isMeaningfulText(s.text))
     if (meaningful.length === 0) { result = 'empty'; return } // 빈/무의미 결과 — 기존 전사 보존
     await replaceSegments(meetingId, meaningful.map(s => ({ ...s, source, isFinal: true })))
     // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름 오염 방지.

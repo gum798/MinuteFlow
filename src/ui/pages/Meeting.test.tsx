@@ -249,13 +249,13 @@ test('화자 구분 진행 중 페이지를 떠났다 돌아와도 진행 문구
   const first = renderPage(m.id)
   await waitFor(() => screen.getByRole('button', { name: /화자 구분/ }))
   await userEvent.click(screen.getByRole('button', { name: /화자 구분/ }))
-  await waitFor(() => expect(screen.getByRole('button', { name: /화자 구분 중/ })).toBeInTheDocument())
+  await waitFor(() => expect(screen.getAllByRole('button', { name: /화자 구분 중/ }).length).toBeGreaterThan(0))
 
   // 다른 메뉴로 이동(언마운트) 후 회의로 복귀(재마운트)
   first.unmount()
   renderPage(m.id)
   // 전역 작업 스토어 덕분에 진행 문구가 여전히 보인다
-  await waitFor(() => expect(screen.getByRole('button', { name: /화자 구분 중/ })).toBeInTheDocument())
+  await waitFor(() => expect(screen.getAllByRole('button', { name: /화자 구분 중/ }).length).toBeGreaterThan(0))
 
   // 작업 완료 → job-done 리스너가 세그먼트를 재로드해 화자 배지가 뜬다
   release([{ start: 0, end: 5, speaker: 'SPK1' }])

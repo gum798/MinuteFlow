@@ -2,7 +2,7 @@ import { db } from './store/db'
 import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting } from './store/meetings'
 import { saveSettings } from './settings'
 import { __resetJobsForTests } from './jobs'
-import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, summarizeMeeting, summarizeGroup } from './meetingActions'
+import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats} from './meetingActions'
 
 // 재전사 경로가 실제 Whisper/오디오 디코딩을 돌리지 않도록 목으로 대체한다.
 vi.mock('./audio/decode', () => ({
@@ -142,4 +142,27 @@ describe('summarizeGroup', () => {
     expect(result).toBe('no-content')
     expect(geminiMock).not.toHaveBeenCalled()
   })
+})
+
+test('dropHallucinatedRepeats: 짧은 문구 4회+ 반복은 환각으로 제거', () => {
+  const segs = [
+    { text: '안녕하세요 회의를 시작합니다' },
+    { text: '지금' }, { text: '지금' }, { text: '지금' }, { text: '지금' }, { text: '지금' },
+    { text: '다음 안건으로 넘어가죠' },
+  ]
+  const out = dropHallucinatedRepeats(segs)
+  expect(out.map(s => s.text)).toEqual(['안녕하세요 회의를 시작합니다', '다음 안건으로 넘어가죠'])
+})
+
+test('dropHallucinatedRepeats: 3회 이하 반복이나 긴 문구는 보존', () => {
+  const segs = [
+    { text: '네' }, { text: '네' }, { text: '네' }, // 3회 — 보존
+    { text: '정말 감사합니다' }, { text: '정말 감사합니다' }, { text: '정말 감사합니다' }, { text: '정말 감사합니다' }, // 긴 문구(>6자) — 보존
+  ]
+  expect(dropHallucinatedRepeats(segs)).toHaveLength(7)
+})
+
+test('dropHallucinatedRepeats: 공백/구두점 차이는 같은 조각으로 본다', () => {
+  const segs = [{ text: '지금.' }, { text: ' 지금 ' }, { text: '지금' }, { text: '지금!' }]
+  expect(dropHallucinatedRepeats(segs)).toHaveLength(0)
 })
