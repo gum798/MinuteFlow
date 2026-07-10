@@ -4,7 +4,8 @@
 // 모든 실행은 enqueue()를 거쳐 직렬화된다 — Whisper 모델이 동시에 둘 이상 로드되는 것을 막고,
 // 부 후처리와 최종 요약이 서로 겹치지 않게 자연히 순서가 정해진다. fire-and-forget으로 호출된다.
 
-import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, summarizeGroup } from './meetingActions'
+import { retranscribeMeeting, diarizeMeeting, retranscribeGroup, diarizeGroup, summarizeMeeting, summarizeGroup } from './meetingActions'
+import { dlog } from './debug'
 import type { SummaryTemplate } from './summarize/prompts'
 
 // 순차 실행 큐의 꼬리. enqueue마다 chain.then(fn)으로 이어 붙인다.
@@ -47,7 +48,16 @@ export async function runFinalPipeline(partIds: string[], template: SummaryTempl
   const lastId = partIds[partIds.length - 1]
   // 재전사·화자 구분 — 한 단계가 실패해도 내부에서 잡고 다음으로 넘어간다.
   // skipped=true면 녹음이 너무 길어 이 두 단계를 건너뛴 것(요약은 기존 자막으로 계속 진행).
-  const skipped = await runPartPipeline(lastId)
+  let skipped = false
+  if (partIds.length > 1) {
+    // 그룹: 전 부를 통합 재전사·화자 구분(엔진 1회 로드, 한 번에 한 부 디코딩).
+    dlog('pipeline', `그룹 통합 처리 시작 (${partIds.length}부)`)
+    try { await retranscribeGroup(partIds) } catch (e) { dlog('pipeline', '그룹 재전사 실패', e) }
+    try { await diarizeGroup(partIds) } catch (e) { dlog('pipeline', '그룹 화자 구분 실패', e) }
+  } else {
+    // 단일 부: 기존 경로(too-long 가드 포함).
+    skipped = await runPartPipeline(lastId)
+  }
   // 요약 결과를 사용자에게 알린다 — 자동 처리는 화면 밖에서 도는 경우가 많아, 끝났는지·왜 안 됐는지 보이게.
   let outcome: 'done' | 'no-key' | 'no-segments' | 'no-content' | 'error' = 'error'
   try {
@@ -57,6 +67,7 @@ export async function runFinalPipeline(partIds: string[], template: SummaryTempl
   } catch {
     outcome = 'error'
   }
+  dlog('pipeline', `완료 outcome=${outcome} skipped=${skipped}`)
   // 너무 긴 녹음이면 "재전사·화자 구분을 건너뛰고 기존 자막으로 처리했다"고 명확히 알린다.
   const skipNote = '녹음이 너무 길어(2시간 초과) 재전사·화자 구분은 건너뛰고 기존 자막으로 처리했어요.'
   const message = (skipped

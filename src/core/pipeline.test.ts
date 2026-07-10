@@ -3,11 +3,15 @@ import { enqueue, runPartPipeline, runFinalPipeline, runAutoPipeline, __resetPip
 // meetingActions를 목으로 대체해 파이프라인의 순서·위임 로직만 검증한다.
 const retranscribeMock = vi.fn(async (_id: string) => 'done')
 const diarizeMock = vi.fn(async (_id: string) => 'done')
+const retranscribeGroupMock = vi.fn(async (_ids: string[]) => 'done')
+const diarizeGroupMock = vi.fn(async (_ids: string[]) => 'done')
 const summarizeMock = vi.fn(async (_id: string, _t: string) => 'done')
 const summarizeGroupMock = vi.fn(async (_ids: string[], _t: string) => 'done')
 vi.mock('./meetingActions', () => ({
   retranscribeMeeting: (id: string) => retranscribeMock(id),
   diarizeMeeting: (id: string) => diarizeMock(id),
+  retranscribeGroup: (ids: string[]) => retranscribeGroupMock(ids),
+  diarizeGroup: (ids: string[]) => diarizeGroupMock(ids),
   summarizeMeeting: (id: string, t: string) => summarizeMock(id, t),
   summarizeGroup: (ids: string[], t: string) => summarizeGroupMock(ids, t),
 }))
@@ -16,6 +20,8 @@ beforeEach(() => {
   __resetPipelineForTests()
   retranscribeMock.mockReset().mockResolvedValue('done')
   diarizeMock.mockReset().mockResolvedValue('done')
+  retranscribeGroupMock.mockReset().mockResolvedValue('done')
+  diarizeGroupMock.mockReset().mockResolvedValue('done')
   summarizeMock.mockReset().mockResolvedValue('done')
   summarizeGroupMock.mockReset().mockResolvedValue('done')
 })
@@ -76,19 +82,19 @@ describe('runPartPipeline — 부 후처리 (요약 없음)', () => {
 })
 
 describe('runFinalPipeline — 마지막 부 후처리 후 통합/단일 요약', () => {
-  test('여러 부면 마지막 부 후처리 후 summarizeGroup을 전체 부 id로 호출한다', async () => {
+  test('여러 부면 전 부를 통합 재전사·화자 구분 후 summarizeGroup을 호출한다', async () => {
     await runFinalPipeline(['m1', 'm2', 'm3'])
-    expect(retranscribeMock).toHaveBeenCalledWith('m3') // 마지막 부만 후처리
-    expect(diarizeMock).toHaveBeenCalledWith('m3')
+    expect(retranscribeGroupMock).toHaveBeenCalledWith(['m1', 'm2', 'm3'])
+    expect(diarizeGroupMock).toHaveBeenCalledWith(['m1', 'm2', 'm3'])
     expect(summarizeGroupMock).toHaveBeenCalledWith(['m1', 'm2', 'm3'], 'minutes')
     expect(summarizeMock).not.toHaveBeenCalled()
   })
 
-  test('단일 부면 summarizeMeeting을 호출한다', async () => {
+  test('단일 부는 기존 per-part 후처리(too-long 가드 유지) 후 summarizeMeeting', async () => {
     await runFinalPipeline(['m1'])
-    expect(retranscribeMock).toHaveBeenCalledWith('m1')
+    expect(retranscribeMock).toHaveBeenCalledWith('m1')   // per-part
+    expect(retranscribeGroupMock).not.toHaveBeenCalled()
     expect(summarizeMock).toHaveBeenCalledWith('m1', 'minutes')
-    expect(summarizeGroupMock).not.toHaveBeenCalled()
   })
 
   test('빈 배열이면 아무것도 하지 않는다', async () => {
