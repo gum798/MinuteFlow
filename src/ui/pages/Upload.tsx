@@ -6,7 +6,7 @@ import { decodeTo16kMono } from '../../core/audio/decode'
 import { detectWebGPU, WhisperLocalEngine, type WhisperProgress } from '../../core/stt/whisperLocal'
 import { transcribeBlobWithGroq, transcribeSamplesWithGroq, GROQ_FILE_LIMIT } from '../../core/stt/groq'
 import { createUploadMeeting, replaceSegments, finishMeeting } from '../../core/store/meetings'
-import { isMeaningfulText, dropHallucinatedRepeats } from '../../core/meetingActions'
+import { isMeaningfulText, dropHallucinatedRepeats, collapseRepeatedPhrases } from '../../core/meetingActions'
 import { applyCorrections } from '../../core/corrections'
 import type { DraftSegment } from '../../core/stt/types'
 
@@ -72,9 +72,10 @@ export default function Upload() {
       }
 
       setStage('저장 중…')
-      // 무의미한 조각('-', 공백 등)은 걸러 저장한다 — 전부 걸러지면 0개로 저장되어 빈 상태 UI가 안내한다.
-      // 등록된 보정 사전을 전사 출력에 자동 적용한다.
-      await replaceSegments(meetingId, dropHallucinatedRepeats(segs.filter(s => isMeaningfulText(s.text))).map(s => ({
+      // 세그먼트 내부 반복 문장(intra)을 먼저 붕괴시킨 뒤, 무의미한 조각('-', 공백 등)은 걸러 저장한다
+      // — 전부 걸러지면 0개로 저장되어 빈 상태 UI가 안내한다. 등록된 보정 사전도 자동 적용한다.
+      const collapsed = segs.map(s => ({ ...s, text: collapseRepeatedPhrases(s.text) }))
+      await replaceSegments(meetingId, dropHallucinatedRepeats(collapsed.filter(s => isMeaningfulText(s.text))).map(s => ({
         ...s, text: applyCorrections(s.text, settings.corrections), source: engine, isFinal: true,
       })))
       await finishMeeting(meetingId, durationSec)

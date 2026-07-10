@@ -58,6 +58,35 @@ export function dropHallucinatedRepeats<T extends { text: string }>(segments: T[
   return out
 }
 
+// 한 세그먼트 text 안에서 같은 문장이 연달아 붙는 환각("다음 영상에서 만나요. 다음 영상에서 만나요. …").
+// 위 dropHallucinatedRepeats가 세그먼트 사이(inter) 반복을 잡는다면, 이건 세그먼트 내부(intra) 반복을 잡는다.
+// 문장은 마침표·물음표·느낌표로 나누고, 공백·구두점을 무시한 정규화가 같은 문장이 3회 이상 연속되면 첫 1회만 남긴다.
+// 자연스러운 2회 반복("네. 네.")은 보존하도록 임계를 3회로 둔다.
+const PHRASE_REPEAT_RUN = 3
+// 문장 = 구두점 아닌 글자들 + 뒤따르는 구두점·공백. 마지막 구두점 없는 꼬리도 하나의 문장으로 잡는다.
+const SENTENCE_RE = /[^.!?]*[.!?]+\s*|[^.!?]+$/g
+
+export function collapseRepeatedPhrases(text: string): string {
+  const parts = text.match(SENTENCE_RE)
+  if (!parts || parts.length < PHRASE_REPEAT_RUN) return text
+  const out: string[] = []
+  let i = 0
+  while (i < parts.length) {
+    const key = norm(parts[i])
+    let j = i + 1
+    while (j < parts.length && norm(parts[j]) === key) j++
+    const runLen = j - i
+    // 같은 문장이 3회 이상 연속 → 첫 1회만 남긴다. 그 외에는 원문 그대로 보존.
+    if (key.length > 0 && runLen >= PHRASE_REPEAT_RUN) {
+      out.push(parts[i])
+    } else {
+      for (let k = i; k < j; k++) out.push(parts[k])
+    }
+    i = j
+  }
+  return out.join('')
+}
+
 // 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
 // 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
 async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Promise<Float32Array> {
@@ -106,8 +135,10 @@ export async function retranscribeMeeting(meetingId: string): Promise<'done' | '
         }, p => { if (p.kind === 'status') setStatus(p.message) })
       } finally { eng.dispose() }
     }
-    // 무의미 조각('-', 공백)을 먼저 걸러 반복이 이어지게 한 뒤 환각("지금 지금…")을 제거한다.
-    const meaningful = dropHallucinatedRepeats(segs.filter(s => isMeaningfulText(s.text)))
+    // intra(세그먼트 내부 반복 문장) 붕괴 먼저 → 무의미 조각('-', 공백)을 걸러 반복이 이어지게 한 뒤
+    // inter(세그먼트 간) 환각("지금 지금…")을 제거한다.
+    const collapsed = segs.map(s => ({ ...s, text: collapseRepeatedPhrases(s.text) }))
+    const meaningful = dropHallucinatedRepeats(collapsed.filter(s => isMeaningfulText(s.text)))
     if (meaningful.length === 0) { result = 'empty'; return } // 빈/무의미 결과 — 기존 전사 보존
     // 등록된 보정 사전을 전사 출력에 자동 적용해 반복 오전사를 교정한다.
     await replaceSegments(meetingId, meaningful.map(s => ({

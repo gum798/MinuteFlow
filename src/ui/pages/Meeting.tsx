@@ -14,6 +14,7 @@ import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, hasMeaningfulTra
 import { enqueue } from '../../core/pipeline'
 import { getRecordingState } from '../../core/recorder/session'
 import { speakerColor } from '../../core/diarize/speakerColors'
+import { groupConsecutiveBySpeaker } from '../../core/diarize/mergeSpeakerRuns'
 import { GROQ_ENABLED, DOCX_ENABLED } from '../../core/features'
 
 export default function MeetingPage() {
@@ -30,6 +31,9 @@ export default function MeetingPage() {
   // 전사문에서 드래그로 선택한 단어(1~40자). 값이 있으면 하단 보정 바를 띄운다.
   const [selectedWord, setSelectedWord] = useState<string | null>(null)
   const [correctToast, setCorrectToast] = useState(false)
+  // 이름 변경 중인 화자 라벨(예: 'SPK1'). 값이 있으면 화자 이름 팝업을 띄운다. renameInput은 그 입력값.
+  const [renamingSpeaker, setRenamingSpeaker] = useState<string | null>(null)
+  const [renameInput, setRenameInput] = useState('')
   // 재전사·화자 구분·요약은 전역 작업 스토어에 산다 → 페이지를 떠났다 와도 진행 상태가 유지된다.
   const jobs = useSyncExternalStore(subscribeJobs, getJobs)
 
@@ -153,14 +157,26 @@ export default function MeetingPage() {
     if (result === 'empty') window.alert('화자를 구분할 수 없었습니다.')
   }
 
-  async function renameSpeaker(speaker: string) {
-    if (!meeting) return
-    const current = meeting.speakerNames?.[speaker] ?? speaker
-    const input = window.prompt('이 화자의 이름을 입력하세요', current)
-    if (!input || !input.trim()) return
-    const names = { ...meeting.speakerNames, [speaker]: input.trim() }
+  // 배지 클릭 → 화자 이름 팝업을 연다. 입력창은 현재 지정된 이름으로 시작한다(없으면 빈값).
+  function startRename(speaker: string) {
+    setRenamingSpeaker(speaker)
+    setRenameInput(meeting?.speakerNames?.[speaker] ?? '')
+  }
+
+  function closeRename() {
+    setRenamingSpeaker(null)
+    setRenameInput('')
+  }
+
+  // 팝업에서 고르거나 입력한 이름을 화자에 지정한다. 빈값이면 취소로 간주.
+  async function applyRename(name: string) {
+    if (!meeting || !renamingSpeaker) return
+    const value = name.trim()
+    if (!value) { closeRename(); return }
+    const names = { ...meeting.speakerNames, [renamingSpeaker]: value }
     setMeeting({ ...meeting, speakerNames: names })
     await updateSpeakerNames(meeting.id, names)
+    closeRename()
   }
 
   // 전사 카드에서 마우스 선택이 끝나면 선택 단어를 읽어 보정 바를 띄운다(1~40자만).
@@ -296,22 +312,33 @@ export default function MeetingPage() {
         </p>
       ) : (
         <section className="card" onMouseUp={onTranscriptMouseUp}>
-          {segments.map(s => {
-            const color = s.speaker ? speakerColor(s.speaker) : null
+          {groupConsecutiveBySpeaker(segments).map(run => {
+            const color = run.speaker ? speakerColor(run.speaker) : null
             return (
-              <p key={s.id} className="row" style={{ justifyContent: 'flex-start', gap: 10, alignItems: 'baseline' }}>
-                {s.speaker && color && (
+              // 같은 화자의 연속 발화는 한 묶음으로: 배지 1개 + 각 발화를 [MM:SS] 텍스트 줄로.
+              <div
+                key={run.items[0].id}
+                className="row"
+                style={{ justifyContent: 'flex-start', gap: 10, alignItems: 'baseline', marginBottom: 6 }}
+              >
+                {run.speaker && color && (
                   <button
                     type="button"
                     className="badge"
                     style={{ background: color.bg, color: color.fg }}
-                    onClick={() => void renameSpeaker(s.speaker!)}
+                    onClick={() => startRename(run.speaker!)}
                   >
-                    {meeting.speakerNames?.[s.speaker] ?? s.speaker}
+                    {meeting.speakerNames?.[run.speaker] ?? run.speaker}
                   </button>
                 )}
-                <span className="seg-time">[{formatTimestamp(s.startSec)}]</span> {s.text}
-              </p>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {run.items.map(s => (
+                    <p key={s.id} className="row" style={{ justifyContent: 'flex-start', gap: 10, alignItems: 'baseline' }}>
+                      <span className="seg-time">[{formatTimestamp(s.startSec)}]</span> {s.text}
+                    </p>
+                  ))}
+                </div>
+              </div>
             )
           })}
         </section>
@@ -326,6 +353,48 @@ export default function MeetingPage() {
         </div>
       )}
       {correctToast && <div className="toast">보정했어요 · 앞으로 자동으로 반영됩니다</div>}
+      {renamingSpeaker && (
+        <div
+          role="dialog"
+          aria-label="화자 이름"
+          onClick={closeRename}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', padding: 16,
+            background: 'rgba(15, 18, 34, 0.35)',
+          }}
+        >
+          <div className="card" style={{ width: 320, maxWidth: '100%' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 12px' }}>화자 이름</h3>
+            {(() => {
+              // 이미 다른 화자에 붙인 이름들 — 버튼으로 재사용할 수 있게 중복 없이 모은다.
+              const existing = [...new Set(Object.values(meeting.speakerNames ?? {}).map(n => n.trim()).filter(Boolean))]
+              return existing.length > 0 && (
+                <div className="row" style={{ flexWrap: 'wrap', gap: 8, justifyContent: 'flex-start', marginBottom: 12 }}>
+                  {existing.map(name => (
+                    <button key={name} type="button" className="btn btn-outline btn-sm" onClick={() => void applyRename(name)}>
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )
+            })()}
+            <input
+              className="input"
+              aria-label="새 화자 이름"
+              placeholder="새 이름 입력"
+              value={renameInput}
+              autoFocus
+              onChange={e => setRenameInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') void applyRename(renameInput) }}
+            />
+            <div className="row" style={{ gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={closeRename}>취소</button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => void applyRename(renameInput)}>저장</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

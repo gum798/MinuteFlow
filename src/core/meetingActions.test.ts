@@ -2,7 +2,7 @@ import { db } from './store/db'
 import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting } from './store/meetings'
 import { saveSettings } from './settings'
 import { __resetJobsForTests } from './jobs'
-import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats} from './meetingActions'
+import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases } from './meetingActions'
 
 // 재전사 경로가 실제 Whisper/오디오 디코딩을 돌리지 않도록 목으로 대체한다.
 vi.mock('./audio/decode', () => ({
@@ -179,4 +179,28 @@ test('dropHallucinatedRepeats: 3회 이하 반복이나 긴 문구는 보존', (
 test('dropHallucinatedRepeats: 공백/구두점 차이는 같은 조각으로 본다', () => {
   const segs = [{ text: '지금.' }, { text: ' 지금 ' }, { text: '지금' }, { text: '지금!' }]
   expect(dropHallucinatedRepeats(segs)).toHaveLength(0)
+})
+
+describe('collapseRepeatedPhrases', () => {
+  test('같은 문장이 3회 이상 연속되면 1회로 축약한다', () => {
+    expect(collapseRepeatedPhrases('다음 영상에서 만나요. 다음 영상에서 만나요. 다음 영상에서 만나요. 감사합니다.'))
+      .toBe('다음 영상에서 만나요. 감사합니다.')
+  })
+
+  test('2회 반복은 자연스러운 발화로 보고 보존한다', () => {
+    expect(collapseRepeatedPhrases('네. 네.')).toBe('네. 네.')
+    expect(collapseRepeatedPhrases('정말 감사합니다. 정말 감사합니다.')).toBe('정말 감사합니다. 정말 감사합니다.')
+  })
+
+  test('다른 문장이 섞이면 각 문장을 독립적으로 카운트한다', () => {
+    // 첫 문장은 3회 → 1회로 축약, 뒤의 2회 반복은 보존
+    expect(collapseRepeatedPhrases('안녕하세요. 안녕하세요. 안녕하세요. 반갑습니다. 반갑습니다.'))
+      .toBe('안녕하세요. 반갑습니다. 반갑습니다.')
+  })
+
+  test('빈 텍스트·단문은 그대로 둔다', () => {
+    expect(collapseRepeatedPhrases('')).toBe('')
+    expect(collapseRepeatedPhrases('안녕하세요')).toBe('안녕하세요')
+    expect(collapseRepeatedPhrases('오늘 회의를 시작하겠습니다.')).toBe('오늘 회의를 시작하겠습니다.')
+  })
 })
