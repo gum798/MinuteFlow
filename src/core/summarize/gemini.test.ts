@@ -46,7 +46,7 @@ test('fetch가 계속 throw(연결 실패)하면 재시도 소진 후 친화적 
   const fetchFn = vi.fn(async () => { throw new TypeError('Load failed') })
   await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch, sleep: async () => {} }))
     .rejects.toThrow(/분할 녹음|다시 시도/)
-  expect(fetchFn).toHaveBeenCalledTimes(4) // 첫 요청 + 재시도 3회
+  expect(fetchFn).toHaveBeenCalledTimes(8) // 모델 4개 × 시도 2회
   // 원시 'Load failed'가 그대로 새어나오지 않아야 한다.
   await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch, sleep: async () => {} }))
     .rejects.not.toThrow(/Load failed/)
@@ -87,26 +87,39 @@ test('429는 retryDelay만큼 대기 후 1회 재시도(스트리밍)', async ()
   expect(out).toBe('## 요약\n성공')
 })
 
-test('503(과부하)은 지수 백오프로 재시도하고 회복되면 요약을 반환한다', async () => {
+test('503(과부하)이면 같은 모델 재시도 후 다음 모델로 폴백해 회복되면 요약을 반환한다', async () => {
   const fetchFn = vi.fn()
     .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE' } }), { status: 503 }))
     .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE' } }), { status: 503 }))
-    .mockResolvedValueOnce(sseResponse([dataEvent('회복됨')]))
-  const sleeps: number[] = []
+    .mockResolvedValueOnce(sseResponse([dataEvent('회복됨')])) // 두 번째 모델에서 성공
+  const urls: string[] = []
   const out = await summarizeWithGemini('p', 'k', {
-    fetchFn: fetchFn as unknown as typeof fetch, sleep: async ms => { sleeps.push(ms) },
+    fetchFn: (async (url: string, init: RequestInit) => { urls.push(url); return (fetchFn as unknown as (u: string, i: RequestInit) => Promise<Response>)(url, init) }) as unknown as typeof fetch,
+    sleep: async () => {},
   })
-  expect(fetchFn).toHaveBeenCalledTimes(3)
-  expect(sleeps).toEqual([1000, 2000]) // 첫 재시도 1s, 둘째 2s (지수 백오프)
+  expect(fetchFn).toHaveBeenCalledTimes(3)          // flash ×2(503) → 다음 모델 ×1(성공)
+  expect(urls[0]).toContain('gemini-3.5-flash')     // 1차 모델
+  expect(urls[2]).toContain('gemini-flash-latest')  // 폴백 모델
   expect(out).toBe('회복됨')
 })
 
-test('503이 재시도를 소진할 때까지 계속되면 503 안내로 실패한다', async () => {
+test('모든 모델이 503이면 마지막에 503 안내로 실패한다', async () => {
   const fetchFn = vi.fn(async () => new Response(JSON.stringify({ error: { code: 503 } }), { status: 503 }))
   await expect(summarizeWithGemini('p', 'k', {
     fetchFn: fetchFn as unknown as typeof fetch, sleep: async () => {},
   })).rejects.toThrow(/503/)
-  expect(fetchFn).toHaveBeenCalledTimes(4) // 첫 요청 + 재시도 3회
+  expect(fetchFn).toHaveBeenCalledTimes(8) // 모델 4개 × 시도 2회
+})
+
+test('404(모델 없음)이면 재시도 없이 다음 모델로 폴백한다', async () => {
+  const fetchFn = vi.fn()
+    .mockResolvedValueOnce(new Response('{}', { status: 404 }))   // 1차 모델 없음
+    .mockResolvedValueOnce(sseResponse([dataEvent('다음 모델')])) // 2차 모델 성공
+  const out = await summarizeWithGemini('p', 'k', {
+    fetchFn: fetchFn as unknown as typeof fetch, sleep: async () => {},
+  })
+  expect(fetchFn).toHaveBeenCalledTimes(2) // 404는 재시도 없이 즉시 다음 모델
+  expect(out).toBe('다음 모델')
 })
 
 describe('verifyGeminiKey', () => {

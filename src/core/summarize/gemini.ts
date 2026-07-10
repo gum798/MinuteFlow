@@ -1,10 +1,15 @@
 // Safari fetch의 ~60초 타임아웃 회피를 위해 비스트리밍 generateContent 대신 SSE 스트리밍을 쓴다.
 // 첫 청크가 수 초 내 도착해 커넥션이 끊기지 않으므로 2시간+ 회의도 'Load failed' 없이 요약된다.
-const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse'
 const defaultSleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
-// 일시적으로 재시도할 HTTP 상태(rate limit·서버 과부하). 최대 시도 횟수(첫 요청 + 재시도).
+// 일시적으로 재시도할 HTTP 상태(rate limit·서버 과부하).
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
-const MAX_ATTEMPTS = 4
+// 요약에 쓸 모델. 앞에서부터 시도하고, 지속 과부하(503)·모델 없음(404)이면 다음으로 폴백한다.
+// 최신 flash가 붐빌 때 구형 flash는 대개 여유가 있어 성공률이 높다. 각 모델당 시도 횟수.
+const SUMMARY_MODELS = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash']
+const ATTEMPTS_PER_MODEL = 2
+function endpointFor(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`
+}
 
 // fetch 자체가 throw(Safari 타임아웃 시 TypeError 'Load failed')하거나 스트림이 도중에 끊겼을 때의 안내.
 const NETWORK_MSG = '네트워크 응답이 지연됐어요. 요약할 내용이 매우 길 수 있어요 — 잠시 후 다시 시도하거나, 설정에서 분할 녹음을 켜서 회의를 나눠 요약해보세요.'
@@ -24,8 +29,8 @@ function parseRetryMs(body: GeminiError): number {
   return Number.isFinite(sec) && sec > 0 ? sec * 1000 : 15_000
 }
 
-function requestOnce(prompt: string, apiKey: string, fetchFn: typeof fetch, signal?: AbortSignal): Promise<Response> {
-  return fetchFn(ENDPOINT, {
+function requestOnce(model: string, prompt: string, apiKey: string, fetchFn: typeof fetch, signal?: AbortSignal): Promise<Response> {
+  return fetchFn(endpointFor(model), {
     method: 'POST',
     headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -151,43 +156,49 @@ export async function summarizeWithGemini(
   const fetchFn = opts.fetchFn ?? fetch
   const sleep = opts.sleep ?? defaultSleep
   const backoffMs = (attempt: number) => Math.min(1000 * 2 ** (attempt - 1), 8000)
-  // 한 번의 시도 = 요청 + (일시 오류면 재시도 신호) + 스트림 읽기. 다음 셋만 재시도한다:
-  //  · fetch 자체 실패(연결 유실·Safari 타임아웃) — Gemini/네트워크 순간 불안정.
-  //  · 일시 HTTP 상태(429·500·502·503·504) — 429는 서버 retryDelay 존중, 그 외 지수 백오프.
-  //  · 200으로 열렸으나 내용 없이 스트림이 끊김(readSseStream이 NETWORK_MSG throw).
-  // 재시도하지 않음: 키/권한/차단 등 영구 오류, 안전필터, 이미 일부라도 받은 스트림.
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    let res: Response
-    try {
-      res = await requestOnce(prompt, apiKey, fetchFn, opts.signal)
-    } catch {
-      if (attempt >= MAX_ATTEMPTS) throw new Error(NETWORK_MSG)
-      await sleep(backoffMs(attempt))
-      continue
-    }
-    // 일시 서버 오류 — 남은 시도가 있으면 대기 후 재요청.
-    if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_ATTEMPTS) {
-      const body = (await res.json().catch(() => ({}))) as GeminiError
-      await sleep(res.status === 429 ? parseRetryMs(body) : backoffMs(attempt))
-      continue
-    }
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as GeminiError
-      const reason = body.error?.details?.find(d => d.reason)?.reason
-      if (res.status === 400 && reason === 'API_KEY_INVALID')
-        throw new Error('Gemini API 키를 확인해주세요. (설정에서 재등록)')
-      if (res.status === 403) throw new Error('API 키 권한을 확인해주세요.')
-      if (res.status === 429) throw new Error('무료 사용량을 잠시 초과했습니다. 잠시 후 다시 시도해주세요.')
-      if (res.status === 503) throw new Error('요약 서버가 잠시 혼잡합니다(503). 잠시 후 다시 시도해주세요.')
-      throw new Error(`요약 요청 실패 (${res.status})`)
-    }
-    try {
-      return await readSseStream(res, opts.onDelta)
-    } catch (e) {
-      // 네트워크 끊김(내용 없이)만 재시도. 안전필터·부분성공 등은 그대로 던진다.
-      if (!(e instanceof Error) || e.message !== NETWORK_MSG || attempt >= MAX_ATTEMPTS) throw e
-      await sleep(backoffMs(attempt))
+  // 모델별로 ATTEMPTS_PER_MODEL회 시도한다. 한 시도 = 요청 + (일시 오류면 재시도 신호) + 스트림 읽기.
+  //  · fetch 실패(연결 유실)·일시 HTTP(429·5xx)·내용 없이 끊긴 스트림 → 같은 모델 재시도 후, 소진 시 다음 모델로 폴백.
+  //  · 404(모델 없음) → 재시도 없이 다음 모델로.
+  //  · 키/권한 영구 오류·안전필터·부분 성공 → 즉시 던진다(폴백 무의미).
+  let lastError = new Error(NETWORK_MSG)
+  for (const model of SUMMARY_MODELS) {
+    for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL; attempt++) {
+      let res: Response
+      try {
+        res = await requestOnce(model, prompt, apiKey, fetchFn, opts.signal)
+      } catch {
+        lastError = new Error(NETWORK_MSG)
+        if (attempt < ATTEMPTS_PER_MODEL) { await sleep(backoffMs(attempt)); continue }
+        break // 이 모델의 네트워크 시도 소진 → 다음 모델
+      }
+      if (RETRYABLE_STATUS.has(res.status)) {
+        const body = (await res.json().catch(() => ({}))) as GeminiError
+        lastError = new Error(res.status === 503
+          ? '요약 서버가 잠시 혼잡합니다(503). 잠시 후 다시 시도해주세요.'
+          : res.status === 429 ? '무료 사용량을 잠시 초과했습니다. 잠시 후 다시 시도해주세요.' : `요약 요청 실패 (${res.status})`)
+        if (attempt < ATTEMPTS_PER_MODEL) { await sleep(res.status === 429 ? parseRetryMs(body) : backoffMs(attempt)); continue }
+        break // 재시도 소진 → 다음 모델로 폴백
+      }
+      if (res.status === 404) { lastError = new Error(`요약 요청 실패 (${res.status})`); break } // 모델 없음 → 다음 모델
+      if (!res.ok) {
+        // 키/권한 등 영구 오류 → 폴백해도 소용없으니 즉시 안내.
+        const body = (await res.json().catch(() => ({}))) as GeminiError
+        const reason = body.error?.details?.find(d => d.reason)?.reason
+        if (res.status === 400 && reason === 'API_KEY_INVALID')
+          throw new Error('Gemini API 키를 확인해주세요. (설정에서 재등록)')
+        if (res.status === 403) throw new Error('API 키 권한을 확인해주세요.')
+        throw new Error(`요약 요청 실패 (${res.status})`)
+      }
+      try {
+        return await readSseStream(res, opts.onDelta)
+      } catch (e) {
+        // 내용 없이 끊긴 스트림(NETWORK_MSG)만 재시도/폴백. 안전필터·부분성공은 그대로 던진다.
+        if (!(e instanceof Error) || e.message !== NETWORK_MSG) throw e
+        lastError = e
+        if (attempt < ATTEMPTS_PER_MODEL) { await sleep(backoffMs(attempt)); continue }
+        break // → 다음 모델
+      }
     }
   }
-  throw new Error(NETWORK_MSG) // 도달 불가(루프에서 반환/throw) — 타입 만족용
+  throw lastError // 모든 모델 실패 → 마지막 오류 안내
 }
