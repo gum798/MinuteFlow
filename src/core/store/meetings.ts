@@ -216,6 +216,11 @@ export async function getSummaries(meetingId: string): Promise<Summary[]> {
   return rows.sort((a, b) => b.createdAt - a.createdAt)
 }
 
+/** 회의의 모든 요약을 삭제한다. 재전사로 전사 내용이 바뀌어 옛 요약이 무효가 될 때 쓴다. */
+export async function deleteSummaries(meetingId: string): Promise<void> {
+  await db.summaries.where('meetingId').equals(meetingId).delete()
+}
+
 /** 회의를 목록에서 즉시 숨긴다(하위 데이터·오디오는 그대로 두어 실행취소를 값싸게 만든다). */
 export async function softDeleteMeeting(id: string): Promise<void> {
   await db.meetings.update(id, { deletedAt: Date.now() })

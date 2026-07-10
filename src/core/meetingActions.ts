@@ -3,7 +3,7 @@
 // 결과를 반환한다(성공/빈결과/오디오없음). 작업 중 던진 예외는 runJob이 job-done(error)로
 // 표면화하므로 여기서 별도 알림을 하지 않는다 — 안내(alert)는 호출부(Meeting)가 반환값으로 판단.
 
-import { getMeetingAudio, getMeeting, getSegments, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames, saveSummary, updateMeetingTitle } from './store/meetings'
+import { getMeetingAudio, getMeeting, getSegments, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames, saveSummary, updateMeetingTitle, deleteSummaries } from './store/meetings'
 import { runJob } from './jobs'
 import { loadSettings } from './settings'
 import { applyCorrections } from './corrections'
@@ -100,6 +100,40 @@ export function collapseRepeatedPhrases(text: string): string {
   return out.join('')
 }
 
+// Whisper가 무음·잡음 구간에서 뱉는 대표적 환각 문구(유튜브 아웃트로 등). 정규화(공백·구두점 제거) 후
+// 이 코어 문자열을 포함하는 문장은 통째로 제거한다. 회의 대화엔 실질적으로 등장하지 않는 문구만 보수적으로 선정.
+// "감사합니다"/"네" 같은 실제 발화와 겹치는 짧은 말은 넣지 않는다(오제거 방지).
+const HALLUCINATION_CORES = [
+  '다음영상에서만나',
+  '다음시간에만나',
+  '시청해주셔서감사',
+  '시청해주셔서정말감사',
+  '오늘도시청해주셔서',
+  '영상을시청해주셔서',
+  '구독과좋아요',
+  '구독좋아요',
+  '좋아요와구독',
+  '알림설정까지',
+  '많은시청부탁',
+  '한글자막by',
+  '유료광고를포함',
+]
+
+/**
+ * 한 세그먼트 text에서 알려진 Whisper 환각 문구가 든 문장을 제거한다.
+ * 문장 단위로 나눠, 정규화한 문장이 HALLUCINATION_CORES 중 하나를 포함하면 그 문장을 버린다.
+ * 남은 문장만 이어 반환한다(전부 환각이면 빈 문자열 → 이후 isMeaningfulText가 걸러냄).
+ */
+export function stripHallucinationPhrases(text: string): string {
+  const parts = text.match(SENTENCE_RE)
+  if (!parts) return text
+  const kept = parts.filter(p => {
+    const n = norm(p)
+    return n.length === 0 || !HALLUCINATION_CORES.some(core => n.includes(core))
+  })
+  return kept.join('').trim()
+}
+
 // 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
 // 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
 async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Promise<Float32Array> {
@@ -146,7 +180,8 @@ async function transcribeOnePart(
       language: settings.language,
     }, p => { if (p.kind === 'status') setStatus(p.message) })
   }
-  const collapsed = segs.map(s => ({ ...s, text: collapseRepeatedPhrases(s.text) }))
+  // 환각 문구 제거 → 세그먼트 내부 반복 축약 → 무의미 조각 필터 → 세그먼트 간 반복 환각 제거.
+  const collapsed = segs.map(s => ({ ...s, text: collapseRepeatedPhrases(stripHallucinationPhrases(s.text)) }))
   const meaningful = dropHallucinatedRepeats(collapsed.filter(s => isMeaningfulText(s.text)))
   dlog('retranscribe', `세그먼트 ${meaningful.length}개(원본 ${segs.length})`)
   if (meaningful.length === 0) return 'empty'
@@ -154,6 +189,8 @@ async function transcribeOnePart(
     ...s, text: applyCorrections(s.text, settings.corrections), source, isFinal: true,
   })))
   await updateSpeakerNames(meetingId, {})
+  // 재전사로 전사 내용이 바뀌었으므로 옛 전사로 만든 요약은 무효 — 삭제한다(자동 정리면 이후 재요약됨).
+  await deleteSummaries(meetingId)
   return 'done'
 }
 

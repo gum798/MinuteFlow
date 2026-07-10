@@ -30,6 +30,14 @@ test('템플릿별 지시문이 다르다', () => {
   expect(new Set([minutes, brief, timeline]).size).toBe(3)
 })
 
+test('회의록 프롬프트는 섹션을 조건부로(내용 없으면 생략) + 날조 금지를 명시한다', () => {
+  const p = buildSummaryPrompt('minutes', meeting, segments)
+  // 결정·액션은 실제 있을 때만 — 억지로 채우지 않게 하는 지시가 들어간다.
+  expect(p).toContain('생략')
+  expect(p).toContain('실제로 결정')
+  expect(p).toContain('추측·일반론으로 채우지 않는다')
+})
+
 test('TEMPLATE_LABELS', () => {
   expect(TEMPLATE_LABELS.minutes).toBe('회의록')
 })

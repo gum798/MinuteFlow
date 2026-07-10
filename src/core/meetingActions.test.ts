@@ -1,8 +1,8 @@
 import { db } from './store/db'
-import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting } from './store/meetings'
+import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting, saveSummary } from './store/meetings'
 import { saveSettings } from './settings'
 import { __resetJobsForTests } from './jobs'
-import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, retranscribeGroup, diarizeMeeting, diarizeGroup, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases, isTooLongToProcess, MAX_PROCESS_SEC } from './meetingActions'
+import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, retranscribeGroup, diarizeMeeting, diarizeGroup, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases, stripHallucinationPhrases, isTooLongToProcess, MAX_PROCESS_SEC } from './meetingActions'
 
 // 재전사 경로가 실제 Whisper/오디오 디코딩을 돌리지 않도록 목으로 대체한다.
 vi.mock('./audio/decode', () => ({
@@ -296,4 +296,37 @@ describe('collapseRepeatedPhrases', () => {
     expect(collapseRepeatedPhrases('안녕하세요')).toBe('안녕하세요')
     expect(collapseRepeatedPhrases('오늘 회의를 시작하겠습니다.')).toBe('오늘 회의를 시작하겠습니다.')
   })
+})
+
+describe('stripHallucinationPhrases', () => {
+  test('알려진 환각 문구가 든 문장은 제거하고 실제 발화는 남긴다', () => {
+    expect(stripHallucinationPhrases('다음 영상에서 만나요. 프론트 개선하신 거 받아보실 수 있을까요?'))
+      .toBe('프론트 개선하신 거 받아보실 수 있을까요?')
+    expect(stripHallucinationPhrases('구독과 좋아요 부탁드립니다. 자료 보내주세요.'))
+      .toBe('자료 보내주세요.')
+    // 공백·구두점 변형에도 매칭
+    expect(stripHallucinationPhrases('시청해 주셔서 감사합니다.')).toBe('')
+  })
+  test('환각 아닌 문장은 그대로 둔다("감사합니다" 같은 실제 발화는 남긴다)', () => {
+    expect(stripHallucinationPhrases('감사합니다.')).toBe('감사합니다.')
+    expect(stripHallucinationPhrases('메일로 보내야 되는데요.')).toBe('메일로 보내야 되는데요.')
+  })
+  test('여러 문장 중 환각만 골라 제거한다', () => {
+    expect(stripHallucinationPhrases('다음 영상에서 만나요. 감사합니다. 다음 영상에서 만나요. 감사합니다.'))
+      .toBe('감사합니다. 감사합니다.')
+  })
+})
+
+test('재전사하면 옛 요약을 삭제한다(전사 내용이 바뀌어 요약이 무효가 되므로)', async () => {
+  const m = await createMeeting()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  await finishMeeting(m.id, 30)
+  await saveSummary(m.id, 'minutes', '옛 전사로 만든 요약', 'gemini-3.5-flash')
+  expect(await getSummaries(m.id)).toHaveLength(1)
+  transcribeMock.mockResolvedValueOnce([{ startSec: 0, endSec: 1, text: '새로 전사된 발언입니다' }])
+
+  const result = await retranscribeMeeting(m.id)
+
+  expect(result).toBe('done')
+  expect(await getSummaries(m.id)).toHaveLength(0) // 옛 요약 무효화
 })
