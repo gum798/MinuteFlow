@@ -11,7 +11,7 @@ export interface AppSettings {
   language: string
   /** 녹음 종료 후 자동으로 재전사·화자 구분·AI 요약을 실행할지 (기본 켜짐). */
   autoPipeline: boolean
-  /** 녹음이 이 분(minute)을 넘으면 무음 시점에 새 부(part)로 분할한다. 0이면 분할 끄기. (기본 60) */
+  /** 내부 처리 구간(분). 이 값마다 새 부로 분할해 디코딩 가능 크기를 유지한다. 화면엔 하나의 연속 회의로 보인다. 0이면 분할 끄기(기본 30) */
   splitMinutes: number
   /** 전사 후처리 보정 사전. 전사 출력에 자동 적용해 반복되는 오전사를 교정한다. (기본 []) */
   corrections: Correction[]
@@ -25,7 +25,7 @@ const DEFAULTS: AppSettings = {
   whisperModel: 'onnx-community/whisper-large-v3-turbo',
   language: 'ko',
   autoPipeline: true,
-  splitMinutes: 60,
+  splitMinutes: 30,
   corrections: [],
 }
 
