@@ -11,6 +11,8 @@ import { decodeTo16kMono } from './audio/decode'
 import { repairHeaderlessWebm } from './audio/webmRepair'
 import { detectWebGPU, WhisperLocalEngine } from './stt/whisperLocal'
 import { DiarizeEngine } from './diarize/diarizeLocal'
+import { globalSpeakerRegions } from './diarize/globalSpeakers'
+import { dlog, dtimer } from './debug'
 import { transcribeSamplesWithGroq } from './stt/groq'
 import { GROQ_ENABLED } from './features'
 import { buildSummaryPrompt, buildGroupSummaryPrompt, extractSuggestedTitle, isDefaultTitle, withDateSuffix, type SummaryTemplate } from './summarize/prompts'
@@ -185,6 +187,62 @@ export async function diarizeMeeting(meetingId: string): Promise<'done' | 'empty
       const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setStatus(p.message) })
       if (regions.length === 0) { result = 'empty'; return }
       await applySpeakers(meetingId, regions)
+      result = 'done'
+    } finally {
+      engine.dispose()
+    }
+  })
+  return result
+}
+
+/**
+ * 그룹(여러 부) 통합 화자 구분. 각 부에서 임베딩만 추출하고, 전 부의 임베딩을 모아
+ * 한 번에 클러스터링해 부 경계를 넘어 일관된 화자 라벨을 각 부 세그먼트에 부여한다.
+ * 엔진은 1회만 로드. 한 부 디코딩/추출 실패는 그 부만 건너뛴다.
+ * 반환: 'done' | 'empty'(임베딩 없음) | 'no-audio'(오디오 있는 부가 없음).
+ */
+export async function diarizeGroup(partIds: string[]): Promise<'done' | 'empty' | 'no-audio'> {
+  const lastId = partIds[partIds.length - 1]
+  let result: 'done' | 'empty' | 'no-audio' = 'no-audio'
+  await runJob(lastId, 'diarize', async setStatus => {
+    const engine = new DiarizeEngine()
+    try {
+      const parts: { partId: string; targets: { start: number; end: number }[]; embeddings: Float32Array[]; offsetSec: number }[] = []
+      let offsetSec = 0
+      let anyAudio = false
+      for (let i = 0; i < partIds.length; i++) {
+        const id = partIds[i]
+        const meeting = await getMeeting(id)
+        const partDur = meeting?.durationSec ?? 0
+        setStatus(`화자 구분 중… (${i + 1}/${partIds.length})`)
+        const blob = await getMeetingAudio(id)
+        if (!blob) { offsetSec += partDur; continue }
+        anyAudio = true
+        try {
+          const endDecode = dtimer('diarizeGroup', `부 ${i + 1} 디코딩`)
+          const samples = await decodeMeetingAudioWithRepair(id, blob)
+          endDecode()
+          dlog('diarizeGroup', `부 ${i + 1}/${partIds.length} 디코딩 완료`, { sec: (samples.length / 16000).toFixed(1), mb: (samples.length * 4 / 1048576).toFixed(1) })
+          const { targets, embeddings } = await engine.extract(samples, p => { if (p.kind === 'status') setStatus(p.message) })
+          dlog('diarizeGroup', `부 ${i + 1} 발화 ${targets.length}개, 임베딩 ${embeddings.length}개`)
+          parts.push({ partId: id, targets, embeddings, offsetSec })
+        } catch (e) {
+          dlog('diarizeGroup', `부 ${i + 1} 건너뜀(실패)`, e instanceof Error ? e.message : e)
+        }
+        offsetSec += partDur
+      }
+      if (!anyAudio) { result = 'no-audio'; return }
+      const total = parts.reduce((n, p) => n + p.embeddings.length, 0)
+      if (total === 0) { result = 'empty'; return }
+      setStatus('화자 묶는 중…')
+      const endCluster = dtimer('diarizeGroup', '전역 클러스터링')
+      const perPartRegions = globalSpeakerRegions(parts.map(p => ({ targets: p.targets, embeddings: p.embeddings, offsetSec: p.offsetSec })))
+      endCluster()
+      const speakerCount = new Set(perPartRegions.flat().map(r => r.speaker)).size
+      dlog('diarizeGroup', `전역 화자 ${speakerCount}명 (임베딩 ${total}개)`)
+      for (let i = 0; i < parts.length; i++) {
+        await applySpeakers(parts[i].partId, perPartRegions[i])
+      }
       result = 'done'
     } finally {
       engine.dispose()
