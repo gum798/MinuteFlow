@@ -207,6 +207,12 @@ export default function MeetingPage() {
     setMeeting({ ...meeting, speakerNames: names })
     // 전역 라벨이므로 그룹 모든 부의 이름맵을 동일하게 갱신
     for (const p of group) await updateSpeakerNames(p.id, { ...p.speakerNames, [renamingSpeaker]: value })
+    // 갱신 후 그룹·회의를 DB에서 다시 읽어 group 상태를 최신화한다. 그러지 않으면 다음 이름 변경/병합이
+    // 변경 전 group[i].speakerNames를 읽어 방금 지정한 이름을 덮어써 잃어버린다(updateSpeakerNames는 맵 전체 교체).
+    const gm = await getMeeting(meeting.id)
+    const g = gm ? await getMeetingGroup(gm) : group
+    setGroup(g)
+    if (gm) setMeeting(gm)
     closeRename()
   }
 
