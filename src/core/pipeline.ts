@@ -5,6 +5,7 @@
 // 부 후처리와 최종 요약이 서로 겹치지 않게 자연히 순서가 정해진다. fire-and-forget으로 호출된다.
 
 import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, summarizeGroup } from './meetingActions'
+import type { SummaryTemplate } from './summarize/prompts'
 
 // 순차 실행 큐의 꼬리. enqueue마다 chain.then(fn)으로 이어 붙인다.
 let chain: Promise<void> = Promise.resolve()
@@ -38,15 +39,28 @@ export async function runPartPipeline(meetingId: string): Promise<void> {
  * - 여러 부면 전체를 통합해 summarizeGroup, 단일 부면 summarizeMeeting.
  * - 요약은 마지막 부 화면에 진행/결과가 표시된다(summarizeGroup·summarizeMeeting 참고).
  */
-export async function runFinalPipeline(partIds: string[]): Promise<void> {
+export async function runFinalPipeline(partIds: string[], template: SummaryTemplate = 'minutes'): Promise<void> {
   if (partIds.length === 0) return
   const lastId = partIds[partIds.length - 1]
-  await runPartPipeline(lastId)
+  await runPartPipeline(lastId) // 재전사·화자 구분 — 한 단계가 실패해도 내부에서 잡고 다음으로 넘어간다.
+  // 요약 결과를 사용자에게 알린다 — 자동 처리는 화면 밖에서 도는 경우가 많아, 끝났는지·왜 안 됐는지 보이게.
+  let outcome: 'done' | 'no-key' | 'no-segments' | 'no-content' | 'error' = 'error'
   try {
-    if (partIds.length > 1) await summarizeGroup(partIds, 'minutes')
-    else await summarizeMeeting(lastId, 'minutes')
+    outcome = partIds.length > 1
+      ? await summarizeGroup(partIds, template)
+      : await summarizeMeeting(lastId, template)
   } catch {
-    // 요약 단계 예외도 job-done 이벤트로 표면화되므로 여기서는 중단만 한다.
+    outcome = 'error'
+  }
+  const message = {
+    done: '자동 정리가 끝났어요 — 회의록·화자·요약이 준비됐습니다.',
+    'no-key': '재전사·화자 구분을 끝냈어요. AI 요약은 설정에 Gemini 키를 넣으면 자동으로 됩니다.',
+    'no-segments': '재전사·화자 구분을 끝냈어요. 요약할 대화 내용이 충분하지 않았습니다.',
+    'no-content': '재전사·화자 구분을 끝냈어요. 요약할 대화 내용이 충분하지 않았습니다.',
+    error: '자동 정리 중 문제가 있었어요. 회의록에서 다시 시도해주세요.',
+  }[outcome]
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('minuteflow:pipeline-done', { detail: { meetingId: lastId, outcome, message } }))
   }
 }
 

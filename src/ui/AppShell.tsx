@@ -29,16 +29,33 @@ const NAV = [
 export default function AppShell() {
   const { phase, elapsedSec } = useSyncExternalStore(subscribeRecording, getRecordingState)
   const updateReady = useUpdateReady()
+  const [pipelineMsg, setPipelineMsg] = useState<string | null>(null)
   useEffect(() => {
     document.body.classList.toggle('is-recording', phase !== 'idle')
     return () => document.body.classList.remove('is-recording')
   }, [phase])
+  // 자동 정리(파이프라인) 완료·실패를 어느 화면에서든 토스트로 알린다.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onDone = (e: Event) => {
+      const msg = (e as CustomEvent<{ message?: string }>).detail?.message
+      if (!msg) return
+      setPipelineMsg(msg)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setPipelineMsg(null), 6000)
+    }
+    window.addEventListener('minuteflow:pipeline-done', onDone)
+    return () => { window.removeEventListener('minuteflow:pipeline-done', onDone); if (timer) clearTimeout(timer) }
+  }, [])
   return (
     <UndoToastProvider>
       {phase !== 'idle' && (
         <Link to="/record" className="island" aria-label="녹음 중 — 녹음 화면으로">
           <span className="island-dot" />녹음 중 · {formatTimestamp(elapsedSec)}
         </Link>
+      )}
+      {pipelineMsg && (
+        <div className="toast" role="status" onClick={() => setPipelineMsg(null)}>{pipelineMsg}</div>
       )}
       {updateReady && phase === 'idle' && (
         <button type="button" className="update-chip" onClick={() => window.location.reload()}>

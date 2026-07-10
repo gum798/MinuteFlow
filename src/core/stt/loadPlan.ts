@@ -47,5 +47,6 @@ export function buildWhisperLoadPlan(model: string, device: 'webgpu' | 'wasm'): 
 // fp16은 wasm에서 fp16 Cast가 불가해 세션 생성이 실패하므로(실측) 제거하고,
 // wasm에서 검증된 int8을 1순위로, 최후 안전망으로 fp32를 둔다.
 export function buildEmbeddingLoadPlan(): { dtype: string }[] {
-  return [{ dtype: 'int8' }, { dtype: 'fp32' }]
+  // uint8은 Chrome·Safari(WebKit) 모두 동작(작음 6.7MB). int8은 WebKit에서 ConvInteger 미지원으로 실패하므로 제외. fp32(26MB)는 최후 폴백.
+  return [{ dtype: 'uint8' }, { dtype: 'fp32' }]
 }

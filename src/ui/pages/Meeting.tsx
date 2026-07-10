@@ -11,7 +11,7 @@ import { loadSettings, saveSettings } from '../../core/settings'
 import { applyCorrections, upsertCorrection } from '../../core/corrections'
 import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
 import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, hasMeaningfulTranscript } from '../../core/meetingActions'
-import { enqueue } from '../../core/pipeline'
+import { enqueue, runFinalPipeline } from '../../core/pipeline'
 import { getRecordingState } from '../../core/recorder/session'
 import { speakerColor } from '../../core/diarize/speakerColors'
 import { groupConsecutiveBySpeaker } from '../../core/diarize/mergeSpeakerRuns'
@@ -138,13 +138,9 @@ export default function MeetingPage() {
   async function autoProcess() {
     if (!meeting) return
     if (segments.length > 0 && !window.confirm('기존 전사를 새 결과로 교체하고 화자 구분·요약까지 진행할까요?')) return
-    const id = meeting.id
-    await enqueue(async () => {
-      const r = await retranscribeMeeting(id)
-      if (r === 'no-audio') return
-      await diarizeMeeting(id)
-      if (loadSettings().geminiApiKey.trim()) await summarizeMeeting(id, template)
-    })
+    // 한 단계(재전사·화자 구분)가 실패해도 다음 단계로 넘어가도록 견고한 파이프라인을 재사용한다.
+    // (예: 일부 브라우저에서 화자 구분이 실패해도 요약은 진행). 완료/실패는 전역 토스트로 알림.
+    void enqueue(() => runFinalPipeline([meeting.id], template))
   }
 
   async function retranscribe() {
