@@ -15,9 +15,18 @@ test('offsetRegions는 전역 시각으로 이동한다', () => {
   expect(offsetRegions([{ start: 1.5, end: 3 }], 20)).toEqual([{ start: 21.5, end: 23 }])
 })
 
-test('filterEmbeddable은 0.4초 미만을 제외한다', () => {
+test('filterEmbeddable은 1초 미만 짧은 조각을 제외한다(과분할 방지)', () => {
   const out = filterEmbeddable([
-    { start: 0, end: 0.3 }, { start: 1, end: 1.5 }, { start: 2, end: 2.39 },
+    { start: 0, end: 0.3 },   // 0.3초 — 제외
+    { start: 1, end: 1.5 },   // 0.5초 — 제외
+    { start: 2, end: 3.2 },   // 1.2초 — 유지
+    { start: 4, end: 4.9 },   // 0.9초 — 제외
   ])
-  expect(out).toEqual([{ start: 1, end: 1.5 }])
+  expect(out).toEqual([{ start: 2, end: 3.2 }])
+})
+
+test('filterEmbeddable 경계: 1초 이상만 남긴다', () => {
+  expect(filterEmbeddable([{ start: 0, end: 0.99 }])).toEqual([])
+  expect(filterEmbeddable([{ start: 0, end: 1.0 }])).toEqual([{ start: 0, end: 1.0 }])
+  expect(filterEmbeddable([{ start: 0, end: 1.5 }])).toEqual([{ start: 0, end: 1.5 }])
 })
