@@ -18,12 +18,25 @@ import { groupConsecutiveBySpeaker } from '../../core/diarize/mergeSpeakerRuns'
 import { canonicalSpeakerLabel, relabelSpeaker } from '../../core/diarize/mergeSpeaker'
 import { GROQ_ENABLED, DOCX_ENABLED } from '../../core/features'
 
+// 부 오름차순으로 각 부의 확정 세그먼트를 로드해 누적 durationSec offset을 startSec/endSec에 더한다.
+// 반환 세그먼트는 표시·복사용 — DB 저장은 각 부의 원본(부-상대)로 이뤄진다.
+async function loadUnifiedSegments(parts: Meeting[]): Promise<TranscriptSegment[]> {
+  const out: TranscriptSegment[] = []
+  let offset = 0
+  for (const p of parts) {
+    const segs = (await getSegments(p.id)).filter(s => s.isFinal)
+    for (const s of segs) out.push({ ...s, startSec: s.startSec + offset, endSec: s.endSec + offset })
+    offset += p.durationSec
+  }
+  return out
+}
+
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const showUndoToast = useUndoToast()
   const [meeting, setMeeting] = useState<Meeting | null | undefined>(undefined)
-  // 같은 분할 그룹의 모든 부(partIndex 오름차순). 2개 이상이면 부 탭을 띄운다.
+  // 같은 분할 그룹의 모든 부(partIndex 오름차순). 전 부를 누적 offset으로 이어 하나의 연속 전사로 렌더한다.
   const [group, setGroup] = useState<Meeting[]>([])
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [title, setTitle] = useState('')
@@ -50,8 +63,9 @@ export default function MeetingPage() {
       setMeeting(m ?? null)
       if (m) {
         setTitle(m.title)
-        setGroup(await getMeetingGroup(m))
-        setSegments((await getSegments(id)).filter(s => s.isFinal))
+        const g = await getMeetingGroup(m)
+        setGroup(g)
+        setSegments(await loadUnifiedSegments(g))
         setAudioAvailable((await getMeetingAudio(id)) !== null)
         setSummaries(await getSummaries(id))
       } else {
@@ -69,10 +83,14 @@ export default function MeetingPage() {
       if (detail.meetingId !== id) return
       if (detail.error) { window.alert(detail.error); return }
       void (async () => {
-        setSegments((await getSegments(id)).filter(s => s.isFinal))
-        setSummaries(await getSummaries(id))
-        const m = await getMeeting(id)
-        if (m) { setMeeting(m); setTitle(m.title) }
+        const m2 = await getMeeting(id)
+        if (m2) {
+          const g = await getMeetingGroup(m2)
+          setGroup(g)
+          setSegments(await loadUnifiedSegments(g))
+          setSummaries(await getSummaries(id))
+          setMeeting(m2); setTitle(m2.title)
+        }
       })()
     }
     window.addEventListener('minuteflow:job-done', onDone)
@@ -82,8 +100,11 @@ export default function MeetingPage() {
   if (meeting === undefined) return <div><p className="sub">불러오는 중…</p></div>
   if (meeting === null) return <div><p className="sub">회의록을 찾을 수 없습니다.</p><Link to="/">홈으로</Link></div>
 
-  // 이 회의에 진행 중인 작업(있다면 하나 — 버튼 상호배타). 진행 문구·버튼 비활성에 쓴다.
-  const job = jobs.find(j => j.meetingId === meeting.id) ?? null
+  // 이 그룹에 진행 중인 작업(있다면 하나 — 버튼 상호배타). 진행 문구·버튼 비활성에 쓴다.
+  const job = jobs.find(j => group.some(p => p.id === j.meetingId)) ?? null
+
+  // 통합 뷰의 길이는 그룹 전 부의 합(단일 회의면 그 회의 길이 그대로).
+  const totalDurationSec = (group.length > 0 ? group : [meeting]).reduce((sum, p) => sum + p.durationSec, 0)
 
   async function saveTitle() {
     if (!meeting || !title.trim() || title === meeting.title) return
@@ -184,7 +205,8 @@ export default function MeetingPage() {
     if (!value) { closeRename(); return }
     const names = { ...meeting.speakerNames, [renamingSpeaker]: value }
     setMeeting({ ...meeting, speakerNames: names })
-    await updateSpeakerNames(meeting.id, names)
+    // 전역 라벨이므로 그룹 모든 부의 이름맵을 동일하게 갱신
+    for (const p of group) await updateSpeakerNames(p.id, { ...p.speakerNames, [renamingSpeaker]: value })
     closeRename()
   }
 
@@ -196,15 +218,19 @@ export default function MeetingPage() {
     const target = canonicalSpeakerLabel(meeting.speakerNames ?? {}, name, from)
     // 합칠 상대가 없으면(사실상 새 이름) 일반 이름 지정과 동일하게 처리한다.
     if (!target) { await applyRename(name); return }
-    const current = await getSegments(meeting.id)
-    const relabeled = relabelSpeaker(current, from, target)
-    const names = { ...(meeting.speakerNames ?? {}) }
-    delete names[from]
-    names[target] = name.trim()
-    await replaceSegments(meeting.id, relabeled)
-    await updateSpeakerNames(meeting.id, names)
-    setSegments(relabeled.filter(s => s.isFinal))
-    setMeeting({ ...meeting, speakerNames: names })
+    // 전역 라벨이므로 그룹 모든 부의 세그먼트를 relabel하고 이름맵을 갱신한다.
+    for (const p of group) {
+      const cur = await getSegments(p.id)
+      await replaceSegments(p.id, relabelSpeaker(cur, from, target))
+      const names = { ...(p.speakerNames ?? {}) }
+      delete names[from]; names[target] = name.trim()
+      await updateSpeakerNames(p.id, names)
+    }
+    const gm = await getMeeting(meeting.id)
+    const g = gm ? await getMeetingGroup(gm) : group
+    setGroup(g)
+    setSegments(await loadUnifiedSegments(g))
+    if (gm) setMeeting(gm)
     closeRename()
   }
 
@@ -223,10 +249,12 @@ export default function MeetingPage() {
     const to = input?.trim() ?? ''
     if (!to || to === from) { setSelectedWord(null); return }
     // getSegments 결과(id·meetingId·speaker 포함)를 그대로 text만 치환해 다시 저장 → speaker 보존.
-    const current = await getSegments(meeting.id)
-    const corrected = current.map(s => ({ ...s, text: applyCorrections(s.text, [{ from, to }]) }))
-    await replaceSegments(meeting.id, corrected)
-    setSegments(corrected.filter(s => s.isFinal))
+    // 통합 뷰이므로 그룹 전 부에 보정을 적용한다.
+    for (const p of group) {
+      const cur = await getSegments(p.id)
+      await replaceSegments(p.id, cur.map(s => ({ ...s, text: applyCorrections(s.text, [{ from, to }]) })))
+    }
+    setSegments(await loadUnifiedSegments(group))
     saveSettings({ corrections: upsertCorrection(loadSettings().corrections, from, to) })
     setSelectedWord(null)
     setCorrectToast(true)
@@ -262,27 +290,13 @@ export default function MeetingPage() {
         style={{ fontSize: 20, fontWeight: 800, border: 'none', background: 'transparent', padding: 0 }}
       />
       <div className="row" style={{ justifyContent: 'flex-start', gap: 10, margin: '6px 0 18px' }}>
-        <span className="muted">길이: {formatTimestamp(meeting.durationSec)}</span>
+        <span className="muted">길이: {formatTimestamp(totalDurationSec)}</span>
         {segments.length > 0 && (
           <span className={`badge ${segments[0].source === 'webspeech' ? 'badge-gray' : 'badge-accent'}`}>
             {segments[0].source === 'webspeech' ? '실시간 자막' : segments[0].source === 'whisper' ? 'Whisper 전사' : 'Groq 전사'}
           </span>
         )}
       </div>
-      {group.length > 1 && (
-        <div className="row" style={{ justifyContent: 'flex-start', gap: 6, margin: '0 0 16px', flexWrap: 'wrap' }}>
-          {group.map(p => (
-            <button
-              key={p.id}
-              type="button"
-              className={`btn btn-sm ${p.id === meeting.id ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => navigate(`/meeting/${p.id}`)}
-            >
-              {p.partIndex ?? 1}부
-            </button>
-          ))}
-        </div>
-      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         {audioAvailable && (
           <button className="btn btn-primary btn-sm" disabled={job !== null || autoBusy} onClick={() => void autoProcess()}>
@@ -340,12 +354,6 @@ export default function MeetingPage() {
             )}
           </div>
         </details>
-      )}
-      {group.length > 1 && summaries.length === 0 && meeting.id !== group[group.length - 1].id && (
-        <p className="sub">
-          통합 요약은 마지막 부에 있어요.{' '}
-          <Link to={`/meeting/${group[group.length - 1].id}`}>마지막 부로 이동</Link>
-        </p>
       )}
       {summaries.map(s => (
         <section key={s.id} className="card" style={{ marginBottom: 12 }}>
