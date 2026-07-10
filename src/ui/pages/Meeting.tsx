@@ -31,7 +31,8 @@ export default function MeetingPage() {
   const [summaries, setSummaries] = useState<Summary[]>([])
   const [template, setTemplate] = useState<SummaryTemplate>('minutes')
   const [copyToast, setCopyToast] = useState(false)
-  // 자동 정리 재진입 방지: 클릭 즉시 잠그고 파이프라인이 끝나면 푼다(잡이 뜨기 전·단계 사이 빈틈 포함).
+  // 자동 정리 재진입 방지: 클릭하면 잠그고 파이프라인이 끝나면 푼다. 전역 job이 뜨기 전·단계 사이의
+  // 빈틈(job이 잠깐 없는 순간)에도 버튼을 잠가, 중복 파이프라인 실행을 막는다.
   const [autoBusy, setAutoBusy] = useState(false)
   // 전사문에서 드래그로 선택한 단어(1~40자). 값이 있으면 하단 보정 바를 띄운다.
   const [selectedWord, setSelectedWord] = useState<string | null>(null)
@@ -413,11 +414,14 @@ export default function MeetingPage() {
           <div className="card" style={{ width: 320, maxWidth: '100%' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 12px' }}>화자 이름</h3>
             {(() => {
-              // 이미 다른 화자에 붙인 이름들 — 버튼으로 재사용할 수 있게 중복 없이 모은다.
-              // 지금 화자에 이미 붙은 이름은 자기 자신이므로 제외(그걸 눌러 병합할 상대가 없음).
-              const own = renamingSpeaker ? (meeting.speakerNames?.[renamingSpeaker] ?? '').trim() : ''
-              const existing = [...new Set(Object.values(meeting.speakerNames ?? {}).map(n => n.trim()).filter(Boolean))]
-                .filter(n => n !== own)
+              // 기존 화자 이름들(지금 바꾸는 라벨 제외) — 하나를 "선택"하면 그 화자로 병합된다.
+              // 라벨 기준으로 걸러야, 다른 라벨이 우연히 같은 이름을 가진 경우에도 그 화자로 병합할 수 있다.
+              const existing = [...new Set(
+                Object.entries(meeting.speakerNames ?? {})
+                  .filter(([label]) => label !== renamingSpeaker)
+                  .map(([, n]) => n.trim())
+                  .filter(Boolean),
+              )]
               return existing.length > 0 && (
                 <div className="row" style={{ flexWrap: 'wrap', gap: 8, justifyContent: 'flex-start', marginBottom: 12 }}>
                   {existing.map(name => (
