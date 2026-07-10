@@ -105,8 +105,8 @@ export async function retranscribeMeeting(meetingId: string): Promise<'done' | '
         }, p => { if (p.kind === 'status') setStatus(p.message) })
       } finally { eng.dispose() }
     }
-    // 반복 환각("지금 지금 지금…")을 먼저 제거하고, 무의미한 조각('-', 공백 등)도 걸러 저장한다.
-    const meaningful = dropHallucinatedRepeats(segs).filter(s => isMeaningfulText(s.text))
+    // 무의미 조각('-', 공백)을 먼저 걸러 반복이 이어지게 한 뒤 환각("지금 지금…")을 제거한다.
+    const meaningful = dropHallucinatedRepeats(segs.filter(s => isMeaningfulText(s.text)))
     if (meaningful.length === 0) { result = 'empty'; return } // 빈/무의미 결과 — 기존 전사 보존
     await replaceSegments(meetingId, meaningful.map(s => ({ ...s, source, isFinal: true })))
     // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름 오염 방지.
