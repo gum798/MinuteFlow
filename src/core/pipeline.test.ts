@@ -64,7 +64,13 @@ describe('runPartPipeline — 부 후처리 (요약 없음)', () => {
 
   test('재전사가 throw해도 던지지 않고 중단한다', async () => {
     retranscribeMock.mockRejectedValue(new Error('boom'))
-    await expect(runPartPipeline('m1')).resolves.toBeUndefined()
+    await expect(runPartPipeline('m1')).resolves.toBe(false)
+    expect(diarizeMock).not.toHaveBeenCalled()
+  })
+
+  test("재전사가 'too-long'이면 화자 구분을 건너뛰고 true를 반환한다", async () => {
+    retranscribeMock.mockResolvedValue('too-long')
+    await expect(runPartPipeline('m1')).resolves.toBe(true)
     expect(diarizeMock).not.toHaveBeenCalled()
   })
 })
@@ -228,5 +234,33 @@ describe('runFinalPipeline — pipeline-done 이벤트', () => {
     stop()
     expect(events[0].message).toBeDefined()
     expect(events[0].message).not.toBe('')
+  })
+})
+
+// 버그("자동정리 눌러도 아무것도 안돼"): 너무 긴 녹음은 재전사·화자 구분을 건너뛰고 요약만 진행하되,
+// 사용자에게 건너뛴 사실을 message로 알려야 한다.
+describe('runFinalPipeline — 너무 긴 녹음(재전사 too-long)', () => {
+  test('재전사·화자 구분은 건너뛰지만 요약은 진행하고, message로 건너뜀을 알린다', async () => {
+    retranscribeMock.mockResolvedValue('too-long')
+    summarizeMock.mockResolvedValue('done')
+    const { events, stop } = collectPipelineDone()
+    await runFinalPipeline(['m1'])
+    stop()
+    expect(diarizeMock).not.toHaveBeenCalled()
+    expect(summarizeMock).toHaveBeenCalledWith('m1', 'minutes')
+    expect(events).toHaveLength(1)
+    expect(events[0].outcome).toBe('done')
+    expect(events[0].message).toContain('건너뛰')
+  })
+
+  test('키가 없어도(no-key) 건너뜀 안내 message를 발행한다', async () => {
+    retranscribeMock.mockResolvedValue('too-long')
+    summarizeMock.mockResolvedValue('no-key')
+    const { events, stop } = collectPipelineDone()
+    await runFinalPipeline(['m1'])
+    stop()
+    expect(events[0].outcome).toBe('no-key')
+    expect(events[0].message).toContain('건너뛰')
+    expect(events[0].message.length).toBeGreaterThan(0)
   })
 })

@@ -31,6 +31,17 @@ export function hasMeaningfulTranscript(segments: { text: string }[], minChars =
   return chars >= minChars
 }
 
+// 재전사·화자 구분은 녹음 전체를 16kHz 모노 PCM으로 한 번에 디코딩한다(초당 64KB).
+// 리샘플 사본·처리 버퍼까지 감안하면 이 정도가 브라우저가 한 번에 디코딩할 수 있는 안전 상한이다.
+// 이 이상(예: 16시간 녹음 ≈ 3.7GB)은 메모리 한계로 디코딩이 무한 대기/OOM에 빠져 파이프라인이
+// 통째로 멈춘다. 그래서 시도하지 않고 건너뛴다 — 요약은 오디오 없이 기존 자막으로 계속 가능하다.
+export const MAX_PROCESS_SEC = 2 * 60 * 60 // 2시간
+
+/** 이 길이를 넘으면 브라우저에서 오디오를 한 번에 디코딩할 수 없어 재전사·화자 구분을 건너뛴다. */
+export function isTooLongToProcess(durationSec: number): boolean {
+  return durationSec > MAX_PROCESS_SEC
+}
+
 // Whisper는 무음·잡음 구간에서 같은 짧은 문구를 규칙적으로 반복 출력하는 환각을 낸다("지금 지금 지금…").
 // 정규화한 텍스트가 직전과 같은 짧은(≤6자) 조각이 REPEAT_RUN회 이상 연달아 나오면 그 연속을 통째로 제거한다.
 // 실제 대화의 자연스러운 반복(예: "네 네")까지 지우지 않도록 임계를 보수적으로(4회) 둔다.
@@ -105,7 +116,10 @@ async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Prom
  * 고품질 재전사. 성공 시 세그먼트를 교체하고 화자 이름 맵을 초기화한다.
  * 오디오가 없으면 'no-audio', 전사 결과가 비거나 의미 없는 조각(무음 → '-' 등)뿐이면 'empty'(기존 유지), 그 외 'done'.
  */
-export async function retranscribeMeeting(meetingId: string): Promise<'done' | 'empty' | 'no-audio'> {
+export async function retranscribeMeeting(meetingId: string): Promise<'done' | 'empty' | 'no-audio' | 'too-long'> {
+  // 너무 긴 녹음은 디코딩이 불가능하므로 시도조차 하지 않는다(잡도 안 뜸) — 파이프라인 정지 방지.
+  const meeting = await getMeeting(meetingId)
+  if (meeting && isTooLongToProcess(meeting.durationSec)) return 'too-long'
   const settings = loadSettings()
   let result: 'done' | 'empty' | 'no-audio' = 'no-audio'
   await runJob(meetingId, 'retranscribe', async setStatus => {
@@ -155,7 +169,10 @@ export async function retranscribeMeeting(meetingId: string): Promise<'done' | '
  * 화자 구분. 성공 시 세그먼트에 speaker를 입힌다.
  * 오디오가 없으면 'no-audio', 화자 결과가 비면 'empty', 그 외 'done'.
  */
-export async function diarizeMeeting(meetingId: string): Promise<'done' | 'empty' | 'no-audio'> {
+export async function diarizeMeeting(meetingId: string): Promise<'done' | 'empty' | 'no-audio' | 'too-long'> {
+  // 재전사와 동일하게 너무 긴 녹음은 디코딩 불가 → 화자 구분도 건너뛴다.
+  const meeting = await getMeeting(meetingId)
+  if (meeting && isTooLongToProcess(meeting.durationSec)) return 'too-long'
   let result: 'done' | 'empty' | 'no-audio' = 'no-audio'
   await runJob(meetingId, 'diarize', async setStatus => {
     setStatus('오디오 준비 중…')

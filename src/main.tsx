@@ -10,7 +10,7 @@ import './ui/theme.css'
 // 세션 종료 시의 최종 요약(Record.onStop)과 같은 큐를 공유하므로 자연히 직렬화된다.
 window.addEventListener('minuteflow:part-complete', e => {
   if (loadSettings().autoPipeline) {
-    void enqueue(() => runPartPipeline((e as CustomEvent).detail.meetingId))
+    void enqueue(async () => { await runPartPipeline((e as CustomEvent).detail.meetingId) })
   }
 })
 

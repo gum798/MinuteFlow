@@ -23,15 +23,18 @@ export function enqueue(fn: () => Promise<void>): Promise<void> {
 /**
  * 완성된 한 부(part)의 후처리: 재전사 → 화자 구분 (요약 없음 — 요약은 세션 종료 시 통합해서 한다).
  * 재전사가 오디오 없음('no-audio')이거나 실패(throw)면 중단. 예외는 이미 job-done 이벤트로 표면화된다.
+ * 반환값 true = 녹음이 너무 길어 재전사·화자 구분을 건너뛴 경우(요약 단계에서 안내에 사용).
  */
-export async function runPartPipeline(meetingId: string): Promise<void> {
+export async function runPartPipeline(meetingId: string): Promise<boolean> {
   try {
     const transcribed = await retranscribeMeeting(meetingId)
-    if (transcribed === 'no-audio') return // 재전사할 오디오가 없으면 화자 구분도 의미 없음
+    if (transcribed === 'too-long') return true // 디코딩 불가 — 화자 구분도 건너뛰고, 요약만 이어서
+    if (transcribed === 'no-audio') return false // 재전사할 오디오가 없으면 화자 구분도 의미 없음
     await diarizeMeeting(meetingId)
   } catch {
     // 어느 단계든 던지면 중단. 에러는 이미 runJob의 job-done(error) 이벤트로 알려졌다.
   }
+  return false
 }
 
 /**
@@ -42,7 +45,9 @@ export async function runPartPipeline(meetingId: string): Promise<void> {
 export async function runFinalPipeline(partIds: string[], template: SummaryTemplate = 'minutes'): Promise<void> {
   if (partIds.length === 0) return
   const lastId = partIds[partIds.length - 1]
-  await runPartPipeline(lastId) // 재전사·화자 구분 — 한 단계가 실패해도 내부에서 잡고 다음으로 넘어간다.
+  // 재전사·화자 구분 — 한 단계가 실패해도 내부에서 잡고 다음으로 넘어간다.
+  // skipped=true면 녹음이 너무 길어 이 두 단계를 건너뛴 것(요약은 기존 자막으로 계속 진행).
+  const skipped = await runPartPipeline(lastId)
   // 요약 결과를 사용자에게 알린다 — 자동 처리는 화면 밖에서 도는 경우가 많아, 끝났는지·왜 안 됐는지 보이게.
   let outcome: 'done' | 'no-key' | 'no-segments' | 'no-content' | 'error' = 'error'
   try {
@@ -52,13 +57,23 @@ export async function runFinalPipeline(partIds: string[], template: SummaryTempl
   } catch {
     outcome = 'error'
   }
-  const message = {
-    done: '자동 정리가 끝났어요 — 회의록·화자·요약이 준비됐습니다.',
-    'no-key': '재전사·화자 구분을 끝냈어요. AI 요약은 설정에 Gemini 키를 넣으면 자동으로 됩니다.',
-    'no-segments': '재전사·화자 구분을 끝냈어요. 요약할 대화 내용이 충분하지 않았습니다.',
-    'no-content': '재전사·화자 구분을 끝냈어요. 요약할 대화 내용이 충분하지 않았습니다.',
-    error: '자동 정리 중 문제가 있었어요. 회의록에서 다시 시도해주세요.',
-  }[outcome]
+  // 너무 긴 녹음이면 "재전사·화자 구분을 건너뛰고 기존 자막으로 처리했다"고 명확히 알린다.
+  const skipNote = '녹음이 너무 길어(2시간 초과) 재전사·화자 구분은 건너뛰고 기존 자막으로 처리했어요.'
+  const message = (skipped
+    ? {
+      done: `${skipNote} AI 요약이 준비됐습니다.`,
+      'no-key': `${skipNote} AI 요약은 설정에 Gemini 키를 넣으면 됩니다.`,
+      'no-segments': `${skipNote} 요약할 대화 내용이 충분하지 않았습니다.`,
+      'no-content': `${skipNote} 요약할 대화 내용이 충분하지 않았습니다.`,
+      error: '녹음이 너무 길어 재전사·화자 구분을 건너뛰었고, 요약 중 문제가 있었어요. 다시 시도해주세요.',
+    }
+    : {
+      done: '자동 정리가 끝났어요 — 회의록·화자·요약이 준비됐습니다.',
+      'no-key': '재전사·화자 구분을 끝냈어요. AI 요약은 설정에 Gemini 키를 넣으면 자동으로 됩니다.',
+      'no-segments': '재전사·화자 구분을 끝냈어요. 요약할 대화 내용이 충분하지 않았습니다.',
+      'no-content': '재전사·화자 구분을 끝냈어요. 요약할 대화 내용이 충분하지 않았습니다.',
+      error: '자동 정리 중 문제가 있었어요. 회의록에서 다시 시도해주세요.',
+    })[outcome]
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('minuteflow:pipeline-done', { detail: { meetingId: lastId, outcome, message } }))
   }

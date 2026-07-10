@@ -155,6 +155,7 @@ export default function MeetingPage() {
     // 빈 결과 안내는 결과를 바꾸지 않으므로 반환값으로 판단해 여기서 직접 알린다.
     const result = await retranscribeMeeting(meeting.id)
     if (result === 'empty') window.alert('전사 결과가 비어 있어 기존 내용을 유지합니다.')
+    else if (result === 'too-long') window.alert('녹음이 너무 길어(2시간 초과) 브라우저에서 재전사할 수 없어요. 기존 자막을 그대로 쓰거나, 더 짧게 나눠 녹음해주세요.')
   }
 
   async function diarize() {
@@ -162,6 +163,7 @@ export default function MeetingPage() {
     // 성공 시 세그먼트·회의 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
     const result = await diarizeMeeting(meeting.id)
     if (result === 'empty') window.alert('화자를 구분할 수 없었습니다.')
+    else if (result === 'too-long') window.alert('녹음이 너무 길어(2시간 초과) 브라우저에서 화자 구분을 할 수 없어요.')
   }
 
   // 배지 클릭 → 화자 이름 팝업을 연다. 입력창은 현재 지정된 이름으로 시작한다(없으면 빈값).

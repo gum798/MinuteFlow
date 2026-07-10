@@ -2,7 +2,7 @@ import { db } from './store/db'
 import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting } from './store/meetings'
 import { saveSettings } from './settings'
 import { __resetJobsForTests } from './jobs'
-import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases } from './meetingActions'
+import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, diarizeMeeting, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases, isTooLongToProcess, MAX_PROCESS_SEC } from './meetingActions'
 
 // 재전사 경로가 실제 Whisper/오디오 디코딩을 돌리지 않도록 목으로 대체한다.
 vi.mock('./audio/decode', () => ({
@@ -60,6 +60,39 @@ describe('hasMeaningfulTranscript', () => {
     expect(hasMeaningfulTranscript([{ text: '가나다' }, { text: '라마' }], 6)).toBe(false)  // 합 5 < 6
     expect(hasMeaningfulTranscript([{ text: '가나' }], 3)).toBe(false)                      // 합 2 < 3
   })
+})
+
+describe('isTooLongToProcess — 디코딩 상한(재전사·화자 구분 건너뛰기 경계)', () => {
+  test('상한 이하면 처리 가능(false)', () => {
+    expect(isTooLongToProcess(0)).toBe(false)
+    expect(isTooLongToProcess(60 * 60)).toBe(false) // 1시간
+    expect(isTooLongToProcess(MAX_PROCESS_SEC)).toBe(false) // 경계값(포함)
+  })
+  test('상한 초과면 너무 김(true)', () => {
+    expect(isTooLongToProcess(MAX_PROCESS_SEC + 1)).toBe(true)
+    expect(isTooLongToProcess(16 * 60 * 60)).toBe(true) // 16시간(스크린샷 사례)
+  })
+})
+
+test("너무 긴 녹음은 재전사가 'too-long'을 반환하고 디코딩·Whisper를 아예 시도하지 않는다", async () => {
+  const m = await createMeeting()
+  await appendSegment({ meetingId: m.id, startSec: 0, endSec: 5, text: '실시간 자막 내용입니다', source: 'webspeech', isFinal: true })
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  await finishMeeting(m.id, MAX_PROCESS_SEC + 1) // 상한 초과
+
+  const result = await retranscribeMeeting(m.id)
+
+  expect(result).toBe('too-long')
+  expect(transcribeMock).not.toHaveBeenCalled() // 디코딩·전사 시도조차 없음(메모리 폭발 방지)
+  // 기존 자막은 그대로 보존된다.
+  expect((await getSegments(m.id)).map(s => s.text)).toEqual(['실시간 자막 내용입니다'])
+})
+
+test("너무 긴 녹음은 화자 구분도 'too-long'을 반환한다", async () => {
+  const m = await createMeeting()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  await finishMeeting(m.id, MAX_PROCESS_SEC + 1)
+  expect(await diarizeMeeting(m.id)).toBe('too-long')
 })
 
 test("재전사가 무의미 조각('-')만 내면 'empty'로 기존 세그먼트를 보존한다", async () => {
