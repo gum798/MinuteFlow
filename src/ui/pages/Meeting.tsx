@@ -10,7 +10,7 @@ import { formatTimestamp } from '../../core/format'
 import { loadSettings, saveSettings } from '../../core/settings'
 import { applyCorrections, upsertCorrection } from '../../core/corrections'
 import { buildSummaryPrompt, TEMPLATE_LABELS, type SummaryTemplate } from '../../core/summarize/prompts'
-import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, hasMeaningfulTranscript } from '../../core/meetingActions'
+import { retranscribeMeeting, diarizeMeeting, summarizeMeeting, retranscribeGroup, diarizeGroup, summarizeGroup, hasMeaningfulTranscript } from '../../core/meetingActions'
 import { enqueue, runFinalPipeline } from '../../core/pipeline'
 import { getRecordingState } from '../../core/recorder/session'
 import { speakerColor } from '../../core/diarize/speakerColors'
@@ -135,7 +135,10 @@ export default function MeetingPage() {
     // 성공 후 데이터 재로드(setSummaries/setMeeting/setTitle)는 job-done 리스너가 담당.
     // 버튼은 키·의미 있는 전사가 있을 때만 노출되므로 'no-key'/'no-content'는 실질적으로 드물지만,
     // 무의미 전사 상태에서 눌린 경우엔 잡 없이 'no-content'가 돌아오므로 여기서 직접 안내한다.
-    const result = await summarizeMeeting(meeting.id, template)
+    // 통합 뷰에선 여러 부가 한 회의이므로, 부가 여럿이면 전체를 통합 요약한다(마지막 부에 저장·표시).
+    const result = group.length > 1
+      ? await summarizeGroup(group.map(p => p.id), template)
+      : await summarizeMeeting(meeting.id, template)
     if (result === 'no-content') window.alert('요약할 대화 내용이 없어요.')
   }
 
@@ -167,13 +170,20 @@ export default function MeetingPage() {
     // (예: 일부 브라우저에서 화자 구분이 실패해도 요약은 진행). 완료/실패는 전역 토스트로 알림.
     // autoBusy는 잡이 뜨기 전 빈틈과 단계 사이 빈틈에도 버튼을 잠가 둔다(파이프라인 종료 시 해제).
     setAutoBusy(true)
-    void enqueue(() => runFinalPipeline([meeting.id], template)).catch(() => {}).finally(() => setAutoBusy(false))
+    // 통합 뷰에선 그룹 전체를 처리한다(부가 여럿이면 runFinalPipeline이 통합 재전사·화자 구분·통합 요약으로 라우팅).
+    const ids = group.length > 0 ? group.map(p => p.id) : [meeting.id]
+    void enqueue(() => runFinalPipeline(ids, template)).catch(() => {}).finally(() => setAutoBusy(false))
   }
 
   async function retranscribe() {
     if (!meeting || !window.confirm('기존 전사를 새 결과로 교체할까요?')) return
     // 성공 시 세그먼트·이름맵 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
     // 빈 결과 안내는 결과를 바꾸지 않으므로 반환값으로 판단해 여기서 직접 알린다.
+    // 통합 뷰에선 부가 여럿이면 전체를 통합 재전사(엔진 1회 로드).
+    if (group.length > 1) {
+      if (await retranscribeGroup(group.map(p => p.id)) === 'no-audio') window.alert('재전사할 오디오가 없습니다.')
+      return
+    }
     const result = await retranscribeMeeting(meeting.id)
     if (result === 'empty') window.alert('전사 결과가 비어 있어 기존 내용을 유지합니다.')
     else if (result === 'too-long') window.alert('녹음이 너무 길어(2시간 초과) 브라우저에서 재전사할 수 없어요. 기존 자막을 그대로 쓰거나, 더 짧게 나눠 녹음해주세요.')
@@ -182,6 +192,11 @@ export default function MeetingPage() {
   async function diarize() {
     if (!meeting) return
     // 성공 시 세그먼트·회의 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
+    // 통합 뷰에선 부가 여럿이면 전체를 통합 화자 구분(부 경계 넘어 일관된 화자 라벨).
+    if (group.length > 1) {
+      if (await diarizeGroup(group.map(p => p.id)) === 'empty') window.alert('화자를 구분할 수 없었습니다.')
+      return
+    }
     const result = await diarizeMeeting(meeting.id)
     if (result === 'empty') window.alert('화자를 구분할 수 없었습니다.')
     else if (result === 'too-long') window.alert('녹음이 너무 길어(2시간 초과) 브라우저에서 화자 구분을 할 수 없어요.')

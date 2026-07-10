@@ -194,6 +194,9 @@ export async function retranscribeGroup(partIds: string[]): Promise<'done' | 'em
     try {
       for (let i = 0; i < partIds.length; i++) {
         setStatus(`재전사 중… (${i + 1}/${partIds.length})`)
+        // 방어: 분할 간격을 매우 크게 잡아 한 부가 상한을 넘으면 디코딩 불가 → 그 부만 건너뛴다.
+        const m = await getMeeting(partIds[i])
+        if (m && isTooLongToProcess(m.durationSec)) { dlog('retranscribeGroup', `부 ${i + 1} 건너뜀(너무 김)`); continue }
         try {
           const r = await transcribeOnePart(eng, partIds[i], settings, webgpu, setStatus)
           if (r !== 'no-audio') anyAudio = true
@@ -256,6 +259,8 @@ export async function diarizeGroup(partIds: string[]): Promise<'done' | 'empty' 
         const meeting = await getMeeting(id)
         const partDur = meeting?.durationSec ?? 0
         setStatus(`화자 구분 중… (${i + 1}/${partIds.length})`)
+        // 방어: 한 부가 상한을 넘으면 디코딩 불가 → 그 부만 건너뛴다(offset은 유지).
+        if (isTooLongToProcess(partDur)) { dlog('diarizeGroup', `부 ${i + 1} 건너뜀(너무 김)`); offsetSec += partDur; continue }
         const blob = await getMeetingAudio(id)
         if (!blob) { offsetSec += partDur; continue }
         anyAudio = true

@@ -1,6 +1,7 @@
 // 녹음 후처리 파이프라인. 두 진입점이 있다:
 //  - runPartPipeline: 녹음 중 완성된 부(part)를 백그라운드에서 재전사→화자 구분 (요약 없음)
-//  - runFinalPipeline: 세션 종료 시 마지막 부 후처리 후 전체 부 통합 요약
+//  - runFinalPipeline: 세션 종료/자동 정리 시 — 여러 부면 전체 통합 재전사·화자 구분 후 통합 요약,
+//    단일 부면 마지막 부만 후처리(재전사·화자 구분, too-long 가드) 후 요약
 // 모든 실행은 enqueue()를 거쳐 직렬화된다 — Whisper 모델이 동시에 둘 이상 로드되는 것을 막고,
 // 부 후처리와 최종 요약이 서로 겹치지 않게 자연히 순서가 정해진다. fire-and-forget으로 호출된다.
 
@@ -39,9 +40,10 @@ export async function runPartPipeline(meetingId: string): Promise<boolean> {
 }
 
 /**
- * 세션 종료 시 최종 파이프라인: 마지막 부를 후처리한 뒤 요약한다.
- * - 여러 부면 전체를 통합해 summarizeGroup, 단일 부면 summarizeMeeting.
- * - 요약은 마지막 부 화면에 진행/결과가 표시된다(summarizeGroup·summarizeMeeting 참고).
+ * 최종 파이프라인(세션 종료·자동 정리).
+ * - 여러 부면 전체를 통합 재전사(retranscribeGroup)·화자 구분(diarizeGroup) 후 summarizeGroup.
+ * - 단일 부면 마지막 부만 후처리(runPartPipeline, too-long 가드 포함) 후 summarizeMeeting.
+ * - 진행/결과는 마지막 부 화면에 표시된다(runJob은 마지막 부 id에 싣는다).
  */
 export async function runFinalPipeline(partIds: string[], template: SummaryTemplate = 'minutes'): Promise<void> {
   if (partIds.length === 0) return

@@ -22,9 +22,13 @@ vi.mock('../../core/stt/whisperLocal', () => ({
   },
 }))
 const diarizeMock = vi.fn(async () => [{ start: 0, end: 5, speaker: 'SPK1' }])
+// 그룹 화자 구분(diarizeGroup)은 engine.extract를 부마다 호출한다 — 매 호출 같은 화자(동일 임베딩)로
+// 응답해, 부 경계를 넘어 하나의 화자(SPK1)로 묶이는지 확인할 수 있게 한다.
+const extractMock = vi.fn(async () => ({ targets: [{ start: 0, end: 5 }], embeddings: [new Float32Array([1, 0])] }))
 vi.mock('../../core/diarize/diarizeLocal', () => ({
   DiarizeEngine: class {
     diarize() { return diarizeMock() }
+    extract() { return extractMock() }
     dispose() {}
   },
 }))
@@ -334,6 +338,51 @@ test('그룹 회의는 모든 부의 전사가 하나의 연속 화면에 이어
   expect(screen.queryByRole('button', { name: /^\d+부$/ })).not.toBeInTheDocument()
   // 둘째 부 세그먼트는 누적 offset(3600s=1:00:00) 이후 시각으로 표시된다
   expect(screen.getByText(/1:00:00/)).toBeInTheDocument()
+})
+
+test('부가 여럿인 그룹에서 화자 구분을 누르면 마지막 부만이 아니라 전 부가 통합 화자 구분된다', async () => {
+  const g = await createMeeting()
+  const p2 = await createMeeting()
+  await markGroupFirstPart(g.id, g.id, g.title, ' (1부)')
+  await db.meetings.update(p2.id, { groupId: g.id, partIndex: 2 })
+  await appendSegment({ meetingId: g.id, startSec: 0, endSec: 5, text: '첫 부 발언', source: 'whisper', isFinal: true })
+  await appendSegment({ meetingId: p2.id, startSec: 0, endSec: 5, text: '둘째 부 발언', source: 'whisper', isFinal: true })
+  await appendAudioChunk(g.id, 0, new Blob(['a']), 'audio/webm')
+  await appendAudioChunk(p2.id, 0, new Blob(['a']), 'audio/webm')
+  await finishMeeting(g.id, 3600)
+  await finishMeeting(p2.id, 60)
+  extractMock.mockClear()
+  renderPage(g.id)
+  await waitFor(() => screen.getByRole('button', { name: /화자 구분/ }))
+  await userEvent.click(screen.getByRole('button', { name: /화자 구분/ }))
+  // diarizeGroup는 부마다 extract를 부른다 → 2부면 2회(diarizeMeeting이면 extract 미호출·1부만 처리).
+  await waitFor(() => expect(extractMock).toHaveBeenCalledTimes(2))
+  // 두 부 모두 세그먼트에 전역 화자(SPK1)가 저장된다 — 마지막 부만이 아님.
+  const s1 = await db.transcriptSegments.where('meetingId').equals(g.id).toArray()
+  const s2 = await db.transcriptSegments.where('meetingId').equals(p2.id).toArray()
+  expect(s1.every(s => s.speaker === 'SPK1')).toBe(true)
+  expect(s2.every(s => s.speaker === 'SPK1')).toBe(true)
+})
+
+test('두 화자를 연달아 이름 변경하면 둘 다 저장된다(변경 전 상태로 덮어쓰기 방지)', async () => {
+  const m = await createMeeting()
+  await appendSegment({ meetingId: m.id, startSec: 0, endSec: 5, text: 'A 발언', source: 'whisper', isFinal: true, speaker: 'SPK1' })
+  await appendSegment({ meetingId: m.id, startSec: 6, endSec: 10, text: 'B 발언', source: 'whisper', isFinal: true, speaker: 'SPK2' })
+  await finishMeeting(m.id, 60)
+  renderPage(m.id)
+  await waitFor(() => screen.getByText('SPK1'))
+  await userEvent.click(screen.getByText('SPK1'))
+  await userEvent.type(screen.getByPlaceholderText('새 이름 입력'), 'Alice')
+  await userEvent.click(screen.getByRole('button', { name: '저장' }))
+  await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument())
+  await userEvent.click(screen.getByText('SPK2'))
+  await userEvent.type(screen.getByPlaceholderText('새 이름 입력'), 'Bob')
+  await userEvent.click(screen.getByRole('button', { name: '저장' }))
+  await waitFor(() => expect(screen.getByText('Bob')).toBeInTheDocument())
+  // 첫 변경(Alice)이 둘째 변경에 덮어써지지 않고 둘 다 DB에 남는다.
+  const names = (await db.meetings.get(m.id))?.speakerNames
+  expect(names?.SPK1).toBe('Alice')
+  expect(names?.SPK2).toBe('Bob')
 })
 
 test('화자 구분 진행 중 페이지를 떠났다 돌아와도 진행 문구가 유지되고 완료 후 배지가 갱신된다', async () => {
