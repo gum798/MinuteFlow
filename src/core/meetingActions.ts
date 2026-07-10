@@ -115,56 +115,97 @@ async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Prom
 }
 
 /**
+ * 한 부를 주어진 Whisper 엔진으로 재전사해 세그먼트를 교체한다(엔진 소유는 호출부).
+ * 오디오 없으면 'no-audio', 결과가 무의미하면 'empty'(기존 유지), 그 외 'done'.
+ */
+async function transcribeOnePart(
+  engine: WhisperLocalEngine, meetingId: string, settings: ReturnType<typeof loadSettings>,
+  webgpu: boolean, setStatus: (s: string) => void,
+): Promise<'done' | 'empty' | 'no-audio'> {
+  const blob = await getMeetingAudio(meetingId)
+  if (!blob) return 'no-audio'
+  const endDecode = dtimer('retranscribe', '디코딩')
+  const samples = await decodeMeetingAudioWithRepair(meetingId, blob)
+  endDecode()
+  dlog('retranscribe', `디코딩 완료`, { sec: (samples.length / 16000).toFixed(1), mb: (samples.length * 4 / 1048576).toFixed(1) })
+  let segs
+  let source: 'whisper' | 'groq'
+  if (GROQ_ENABLED && settings.groqApiKey) {
+    source = 'groq'
+    setStatus('Groq로 전사 중…')
+    segs = await transcribeSamplesWithGroq(samples, {
+      apiKey: settings.groqApiKey, language: settings.language,
+      onPart: (d, t) => setStatus(`Groq 분할 전사 중 (${d}/${t})`),
+    })
+  } else {
+    source = 'whisper'
+    setStatus('브라우저 Whisper로 전사 중… (모델 다운로드가 필요할 수 있어요)')
+    segs = await engine.transcribe(samples, {
+      model: webgpu ? settings.whisperModel : 'onnx-community/whisper-base',
+      device: webgpu ? 'webgpu' : 'wasm',
+      language: settings.language,
+    }, p => { if (p.kind === 'status') setStatus(p.message) })
+  }
+  const collapsed = segs.map(s => ({ ...s, text: collapseRepeatedPhrases(s.text) }))
+  const meaningful = dropHallucinatedRepeats(collapsed.filter(s => isMeaningfulText(s.text)))
+  dlog('retranscribe', `세그먼트 ${meaningful.length}개(원본 ${segs.length})`)
+  if (meaningful.length === 0) return 'empty'
+  await replaceSegments(meetingId, meaningful.map(s => ({
+    ...s, text: applyCorrections(s.text, settings.corrections), source, isFinal: true,
+  })))
+  await updateSpeakerNames(meetingId, {})
+  return 'done'
+}
+
+/**
  * 고품질 재전사. 성공 시 세그먼트를 교체하고 화자 이름 맵을 초기화한다.
  * 오디오가 없으면 'no-audio', 전사 결과가 비거나 의미 없는 조각(무음 → '-' 등)뿐이면 'empty'(기존 유지), 그 외 'done'.
  */
 export async function retranscribeMeeting(meetingId: string): Promise<'done' | 'empty' | 'no-audio' | 'too-long'> {
-  // 너무 긴 녹음은 디코딩이 불가능하므로 시도조차 하지 않는다(잡도 안 뜸) — 파이프라인 정지 방지.
   const meeting = await getMeeting(meetingId)
   if (meeting && isTooLongToProcess(meeting.durationSec)) return 'too-long'
   const settings = loadSettings()
   let result: 'done' | 'empty' | 'no-audio' = 'no-audio'
   await runJob(meetingId, 'retranscribe', async setStatus => {
     setStatus('오디오 준비 중…')
-    const blob = await getMeetingAudio(meetingId)
-    if (!blob) { result = 'no-audio'; return }
-    const samples = await decodeMeetingAudioWithRepair(meetingId, blob)
-    let segs
-    let source: 'whisper' | 'groq'
-    if (GROQ_ENABLED && settings.groqApiKey) {
-      source = 'groq'
-      setStatus('Groq로 전사 중…')
-      segs = await transcribeSamplesWithGroq(samples, {
-        apiKey: settings.groqApiKey, language: settings.language,
-        onPart: (d, t) => setStatus(`Groq 분할 전사 중 (${d}/${t})`),
-      })
-    } else {
-      source = 'whisper'
-      const webgpu = await detectWebGPU()
-      const eng = new WhisperLocalEngine()
-      try {
-        setStatus('브라우저 Whisper로 전사 중… (모델 다운로드가 필요할 수 있어요)')
-        segs = await eng.transcribe(samples, {
-          model: webgpu ? settings.whisperModel : 'onnx-community/whisper-base',
-          device: webgpu ? 'webgpu' : 'wasm',
-          language: settings.language,
-        }, p => { if (p.kind === 'status') setStatus(p.message) })
-      } finally { eng.dispose() }
-    }
-    // intra(세그먼트 내부 반복 문장) 붕괴 먼저 → 무의미 조각('-', 공백)을 걸러 반복이 이어지게 한 뒤
-    // inter(세그먼트 간) 환각("지금 지금…")을 제거한다.
-    const collapsed = segs.map(s => ({ ...s, text: collapseRepeatedPhrases(s.text) }))
-    const meaningful = dropHallucinatedRepeats(collapsed.filter(s => isMeaningfulText(s.text)))
-    if (meaningful.length === 0) { result = 'empty'; return } // 빈/무의미 결과 — 기존 전사 보존
-    // 등록된 보정 사전을 전사 출력에 자동 적용해 반복 오전사를 교정한다.
-    await replaceSegments(meetingId, meaningful.map(s => ({
-      ...s, text: applyCorrections(s.text, settings.corrections), source, isFinal: true,
-    })))
-    // 재전사로 기존 speaker가 사라지므로 화자 이름 맵도 초기화 — 재-화자구분 시 옛 이름 오염 방지.
-    await updateSpeakerNames(meetingId, {})
-    result = 'done'
+    const webgpu = (GROQ_ENABLED && settings.groqApiKey) ? false : await detectWebGPU()
+    const eng = new WhisperLocalEngine()
+    try {
+      result = await transcribeOnePart(eng, meetingId, settings, webgpu, setStatus)
+    } finally { eng.dispose() }
   })
   return result
+}
+
+/**
+ * 그룹(여러 부) 통합 재전사. Whisper 엔진 1개로 각 부를 순차 재전사한다(부마다 모델 재로딩 방지).
+ * 한 부 디코딩/전사 실패는 그 부만 건너뛴다. 반환: 오디오 있는 부가 하나도 없으면 'no-audio',
+ * 하나라도 재전사에 성공하면 'done', 오디오는 있었으나 전부 무의미/실패면 'empty'.
+ */
+export async function retranscribeGroup(partIds: string[]): Promise<'done' | 'empty' | 'no-audio'> {
+  const lastId = partIds[partIds.length - 1]
+  const settings = loadSettings()
+  let anyAudio = false
+  let anyDone = false
+  await runJob(lastId, 'retranscribe', async setStatus => {
+    setStatus('오디오 준비 중…')
+    const webgpu = (GROQ_ENABLED && settings.groqApiKey) ? false : await detectWebGPU()
+    const eng = new WhisperLocalEngine()
+    try {
+      for (let i = 0; i < partIds.length; i++) {
+        setStatus(`재전사 중… (${i + 1}/${partIds.length})`)
+        try {
+          const r = await transcribeOnePart(eng, partIds[i], settings, webgpu, setStatus)
+          if (r !== 'no-audio') anyAudio = true
+          if (r === 'done') anyDone = true
+        } catch (e) {
+          anyAudio = true
+          dlog('retranscribeGroup', `부 ${i + 1} 건너뜀(실패)`, e instanceof Error ? e.message : e)
+        }
+      }
+    } finally { eng.dispose() }
+  })
+  return anyDone ? 'done' : anyAudio ? 'empty' : 'no-audio'
 }
 
 /**
