@@ -31,7 +31,7 @@ export function applyCorrections(text: string, dict: Correction[]): string {
   for (const { from, to } of sorted) {
     const esc = escapeRegExp(from)
     const re = isAscii(from) ? new RegExp(`\\b${esc}\\b`, 'gi') : new RegExp(esc, 'g')
-    out = out.replace(re, to)
+    out = out.replace(re, () => to) // 함수 replacer로 to 안의 $& 등 치환 패턴 무력화
   }
   return out
 }
