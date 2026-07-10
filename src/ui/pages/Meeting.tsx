@@ -15,6 +15,7 @@ import { enqueue, runFinalPipeline } from '../../core/pipeline'
 import { getRecordingState } from '../../core/recorder/session'
 import { speakerColor } from '../../core/diarize/speakerColors'
 import { groupConsecutiveBySpeaker } from '../../core/diarize/mergeSpeakerRuns'
+import { canonicalSpeakerLabel, relabelSpeaker } from '../../core/diarize/mergeSpeaker'
 import { GROQ_ENABLED, DOCX_ENABLED } from '../../core/features'
 
 export default function MeetingPage() {
@@ -30,6 +31,8 @@ export default function MeetingPage() {
   const [summaries, setSummaries] = useState<Summary[]>([])
   const [template, setTemplate] = useState<SummaryTemplate>('minutes')
   const [copyToast, setCopyToast] = useState(false)
+  // 자동 정리 재진입 방지: 클릭 즉시 잠그고 파이프라인이 끝나면 푼다(잡이 뜨기 전·단계 사이 빈틈 포함).
+  const [autoBusy, setAutoBusy] = useState(false)
   // 전사문에서 드래그로 선택한 단어(1~40자). 값이 있으면 하단 보정 바를 띄운다.
   const [selectedWord, setSelectedWord] = useState<string | null>(null)
   const [correctToast, setCorrectToast] = useState(false)
@@ -136,11 +139,13 @@ export default function MeetingPage() {
   // 재전사 → 화자 구분 → AI 요약(키 있을 때)을 한 번에. 각 단계는 전역 잡으로 진행 표시되고,
   // 결과 재로드는 job-done 리스너가 담당. 전역 큐(enqueue)로 백그라운드 파이프라인과 직렬화된다.
   async function autoProcess() {
-    if (!meeting) return
+    if (!meeting || autoBusy || job) return // 클릭~첫 잡 등록 사이 빈틈에 두 번 눌려 파이프라인이 중복 실행되는 것 방지
     if (segments.length > 0 && !window.confirm('기존 전사를 새 결과로 교체하고 화자 구분·요약까지 진행할까요?')) return
     // 한 단계(재전사·화자 구분)가 실패해도 다음 단계로 넘어가도록 견고한 파이프라인을 재사용한다.
     // (예: 일부 브라우저에서 화자 구분이 실패해도 요약은 진행). 완료/실패는 전역 토스트로 알림.
-    void enqueue(() => runFinalPipeline([meeting.id], template))
+    // autoBusy는 잡이 뜨기 전 빈틈과 단계 사이 빈틈에도 버튼을 잠가 둔다(파이프라인 종료 시 해제).
+    setAutoBusy(true)
+    void enqueue(() => runFinalPipeline([meeting.id], template)).catch(() => {}).finally(() => setAutoBusy(false))
   }
 
   async function retranscribe() {
@@ -169,7 +174,7 @@ export default function MeetingPage() {
     setRenameInput('')
   }
 
-  // 팝업에서 고르거나 입력한 이름을 화자에 지정한다. 빈값이면 취소로 간주.
+  // 팝업 입력창에 직접 친 이름을 이 화자에만 지정한다(철자가 같아도 병합하지 않음 — 다른 사람일 수 있으므로).
   async function applyRename(name: string) {
     if (!meeting || !renamingSpeaker) return
     const value = name.trim()
@@ -177,6 +182,26 @@ export default function MeetingPage() {
     const names = { ...meeting.speakerNames, [renamingSpeaker]: value }
     setMeeting({ ...meeting, speakerNames: names })
     await updateSpeakerNames(meeting.id, names)
+    closeRename()
+  }
+
+  // 기존 화자 이름을 "선택"하면 = 같은 사람이라는 뜻 → 내부 라벨까지 그 화자로 병합한다.
+  // (지금 화자의 모든 발화를 대상 라벨로 재지정 → 색·연속 발화 묶기·요약이 한 사람으로 취급된다.)
+  async function mergeSpeakerInto(name: string) {
+    if (!meeting || !renamingSpeaker) return
+    const from = renamingSpeaker
+    const target = canonicalSpeakerLabel(meeting.speakerNames ?? {}, name, from)
+    // 합칠 상대가 없으면(사실상 새 이름) 일반 이름 지정과 동일하게 처리한다.
+    if (!target) { await applyRename(name); return }
+    const current = await getSegments(meeting.id)
+    const relabeled = relabelSpeaker(current, from, target)
+    const names = { ...(meeting.speakerNames ?? {}) }
+    delete names[from]
+    names[target] = name.trim()
+    await replaceSegments(meeting.id, relabeled)
+    await updateSpeakerNames(meeting.id, names)
+    setSegments(relabeled.filter(s => s.isFinal))
+    setMeeting({ ...meeting, speakerNames: names })
     closeRename()
   }
 
@@ -257,8 +282,8 @@ export default function MeetingPage() {
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         {audioAvailable && (
-          <button className="btn btn-primary btn-sm" disabled={job !== null} onClick={() => void autoProcess()}>
-            {job ? (job.status || '정리 중…') : '✨ 자동 정리'}
+          <button className="btn btn-primary btn-sm" disabled={job !== null || autoBusy} onClick={() => void autoProcess()}>
+            {job ? (job.status || '정리 중…') : autoBusy ? '정리 중…' : '✨ 자동 정리'}
           </button>
         )}
         <button className="btn btn-outline btn-sm" onClick={() => exportAs('md')}>Markdown 내보내기</button>
@@ -389,11 +414,14 @@ export default function MeetingPage() {
             <h3 style={{ margin: '0 0 12px' }}>화자 이름</h3>
             {(() => {
               // 이미 다른 화자에 붙인 이름들 — 버튼으로 재사용할 수 있게 중복 없이 모은다.
+              // 지금 화자에 이미 붙은 이름은 자기 자신이므로 제외(그걸 눌러 병합할 상대가 없음).
+              const own = renamingSpeaker ? (meeting.speakerNames?.[renamingSpeaker] ?? '').trim() : ''
               const existing = [...new Set(Object.values(meeting.speakerNames ?? {}).map(n => n.trim()).filter(Boolean))]
+                .filter(n => n !== own)
               return existing.length > 0 && (
                 <div className="row" style={{ flexWrap: 'wrap', gap: 8, justifyContent: 'flex-start', marginBottom: 12 }}>
                   {existing.map(name => (
-                    <button key={name} type="button" className="btn btn-outline btn-sm" onClick={() => void applyRename(name)}>
+                    <button key={name} type="button" className="btn btn-outline btn-sm" onClick={() => void mergeSpeakerInto(name)}>
                       {name}
                     </button>
                   ))}
