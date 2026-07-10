@@ -15,6 +15,11 @@ vi.mock('../../core/store/storage', () => ({
 }))
 import { getStorageBreakdown, clearModelCaches } from '../../core/store/storage'
 
+const verifyGeminiKeyMock = vi.fn(async (_k: string) => ({
+  ok: true, kind: 'valid' as const, message: '키가 정상 동작합니다.', modelCount: 2, hasFlash: true, flashInputLimit: 1048576,
+}))
+vi.mock('../../core/summarize/gemini', () => ({ verifyGeminiKey: (k: string) => verifyGeminiKeyMock(k) }))
+
 beforeEach(() => { localStorage.clear(); vi.clearAllMocks() })
 
 function renderPage() {
@@ -34,6 +39,27 @@ test('Gemini 키를 저장하면 설정에 반영된다', async () => {
   await userEvent.type(screen.getByLabelText(/Gemini API 키/), 'AIza_x')
   await userEvent.click(screen.getByRole('button', { name: /저장/ }))
   await waitFor(() => expect(loadSettings().geminiApiKey).toBe('AIza_x'))
+})
+
+test('키 검증 버튼은 키가 비어있으면 비활성이고, 누르면 상태·모델·flash·한도를 보여준다', async () => {
+  renderPage()
+  expect(screen.getByRole('button', { name: '키 검증' })).toBeDisabled()
+  await userEvent.type(screen.getByLabelText(/Gemini API 키/), 'AIza_ok')
+  await userEvent.click(screen.getByRole('button', { name: '키 검증' }))
+  const status = await screen.findByText(/키가 정상 동작합니다/)
+  expect(verifyGeminiKeyMock).toHaveBeenCalledWith('AIza_ok')
+  expect(status).toHaveTextContent('모델 2개')
+  expect(status).toHaveTextContent('gemini-3.5-flash 사용 가능')
+  expect(status).toHaveTextContent('입력 한도 1,048,576 토큰')
+})
+
+test('키를 수정하면 이전 검증 결과가 지워진다', async () => {
+  renderPage()
+  await userEvent.type(screen.getByLabelText(/Gemini API 키/), 'AIza_ok')
+  await userEvent.click(screen.getByRole('button', { name: '키 검증' }))
+  await screen.findByText(/키가 정상 동작합니다/)
+  await userEvent.type(screen.getByLabelText(/Gemini API 키/), 'more')
+  expect(screen.queryByText(/키가 정상 동작합니다/)).not.toBeInTheDocument()
 })
 
 test('키는 브라우저에만 저장된다는 고지가 있다', () => {

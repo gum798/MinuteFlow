@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { loadSettings, saveSettings, type WhisperModelId } from '../../core/settings'
+import { verifyGeminiKey, type GeminiKeyStatus } from '../../core/summarize/gemini'
 import { upsertCorrection, type Correction } from '../../core/corrections'
 import { detectWebGPU } from '../../core/stt/whisperLocal'
 import { GROQ_ENABLED } from '../../core/features'
@@ -23,9 +24,22 @@ export default function Settings() {
   const [cacheToast, setCacheToast] = useState(false)
   const [newFrom, setNewFrom] = useState('')
   const [newTo, setNewTo] = useState('')
+  const [verifying, setVerifying] = useState(false)
+  const [keyStatus, setKeyStatus] = useState<GeminiKeyStatus | null>(null)
 
   useEffect(() => { void detectWebGPU().then(setWebgpu) }, [])
   useEffect(() => { void getStorageBreakdown().then(setStorage) }, [])
+
+  // 저장 전 현재 입력한 키가 실제로 동작하는지 확인한다(요약 할당량 미소모, models.list).
+  async function checkKey() {
+    setVerifying(true)
+    setKeyStatus(null)
+    try {
+      setKeyStatus(await verifyGeminiKey(form.geminiApiKey))
+    } finally {
+      setVerifying(false)
+    }
+  }
 
   function save() {
     saveSettings(form)
@@ -71,8 +85,26 @@ export default function Settings() {
           <label htmlFor="gemini-key">Gemini API 키</label>
           <input id="gemini-key" type="password" className="input" placeholder="AIza..."
             value={form.geminiApiKey}
-            onChange={e => setForm({ ...form, geminiApiKey: e.target.value })} />
+            onChange={e => { setForm({ ...form, geminiApiKey: e.target.value }); setKeyStatus(null) }} />
         </div>
+        <div className="row" style={{ gap: 8, marginTop: 8, justifyContent: 'flex-start' }}>
+          <button type="button" className="btn btn-outline btn-sm"
+            disabled={verifying || !form.geminiApiKey.trim()} onClick={() => void checkKey()}>
+            {verifying ? '확인 중…' : '키 검증'}
+          </button>
+        </div>
+        {keyStatus && (
+          <p className="hint" role="status" style={{ marginTop: 8, color: keyStatus.ok ? '#15803D' : 'var(--warn-fg)' }}>
+            {keyStatus.ok ? '✅ ' : '⚠️ '}{keyStatus.message}
+            {keyStatus.ok && (
+              <>
+                {' · '}모델 {keyStatus.modelCount}개
+                {' · '}gemini-3.5-flash {keyStatus.hasFlash ? '사용 가능' : '목록에 없음'}
+                {keyStatus.flashInputLimit ? ` · 입력 한도 ${keyStatus.flashInputLimit.toLocaleString()} 토큰` : ''}
+              </>
+            )}
+          </p>
+        )}
       </section>
 
       {GROQ_ENABLED && (

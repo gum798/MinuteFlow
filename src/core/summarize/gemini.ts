@@ -99,6 +99,51 @@ async function readSseStream(res: Response, onDelta?: (accumulated: string) => v
   return accumulated
 }
 
+// 키 검증 결과. kind로 상태를 구분하고, 정상이면 접근 가능 모델·flash 한도(등급/상태 정보)를 함께 준다.
+export interface GeminiKeyStatus {
+  ok: boolean
+  kind: 'valid' | 'invalid' | 'no-permission' | 'rate-limited' | 'server-error' | 'network-error' | 'empty'
+  message: string
+  modelCount?: number
+  hasFlash?: boolean
+  flashInputLimit?: number
+}
+
+const MODELS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models'
+
+interface ModelsList {
+  models?: { name?: string; inputTokenLimit?: number; supportedGenerationMethods?: string[] }[]
+}
+
+/**
+ * Gemini API 키가 실제로 동작하는지 검증한다. 요약 할당량을 쓰지 않는 models.list(GET)로 확인한다.
+ * 정상이면 접근 가능 모델 수·앱이 쓰는 gemini-3.5-flash 접근 여부·입력 토큰 한도를 함께 돌려준다.
+ */
+export async function verifyGeminiKey(apiKey: string, fetchFn: typeof fetch = fetch): Promise<GeminiKeyStatus> {
+  if (!apiKey.trim()) return { ok: false, kind: 'empty', message: '키가 비어 있어요. 먼저 키를 입력해주세요.' }
+  let res: Response
+  try {
+    res = await fetchFn(`${MODELS_ENDPOINT}?pageSize=100`, { headers: { 'x-goog-api-key': apiKey } })
+  } catch {
+    return { ok: false, kind: 'network-error', message: '네트워크 오류로 확인하지 못했어요. 잠시 후 다시 시도해주세요.' }
+  }
+  if (res.status === 400 || res.status === 401)
+    return { ok: false, kind: 'invalid', message: '키가 유효하지 않습니다. Google AI Studio에서 다시 확인해주세요.' }
+  if (res.status === 403)
+    return { ok: false, kind: 'no-permission', message: '이 키로 Generative Language API 권한이 없어요. (API 사용 설정 확인)' }
+  if (res.status === 429)
+    return { ok: false, kind: 'rate-limited', message: '사용량을 잠시 초과했어요. 키는 정상일 수 있으니 잠시 후 다시 시도해주세요.' }
+  if (!res.ok)
+    return { ok: false, kind: 'server-error', message: `구글 서버 일시 오류(${res.status}). 키 상태는 불명이에요. 잠시 후 다시 시도해주세요.` }
+  const body = (await res.json().catch(() => ({}))) as ModelsList
+  const models = body.models ?? []
+  const flash = models.find(m => (m.name ?? '').includes('gemini-3.5-flash'))
+  return {
+    ok: true, kind: 'valid', message: '키가 정상 동작합니다.',
+    modelCount: models.length, hasFlash: !!flash, flashInputLimit: flash?.inputTokenLimit,
+  }
+}
+
 export async function summarizeWithGemini(
   prompt: string, apiKey: string,
   opts: { fetchFn?: typeof fetch; sleep?: (ms: number) => Promise<void>; onDelta?: (accumulated: string) => void; signal?: AbortSignal } = {},
