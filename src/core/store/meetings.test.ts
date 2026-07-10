@@ -5,6 +5,7 @@ import {
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting, recoverOrphanAudio,
   createUploadMeeting, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames,
   softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
+  softDeleteGroup, restoreGroup, purgeGroup,
   saveSummary, getSummaries,
 } from './meetings'
 
@@ -262,6 +263,54 @@ test('restore된 회의에 purgeMeeting을 호출하면 no-op (경합 방어)', 
   await purgeMeeting(m.id)
   expect(await getMeeting(m.id)).toBeDefined()
   expect((await listMeetings()).map(x => x.id)).toContain(m.id)
+})
+
+test('softDeleteGroup/restoreGroup/purgeGroup은 분할 그룹 전체를 다룬다', async () => {
+  const p1 = await createMeeting()
+  await markGroupFirstPart(p1.id, p1.id, p1.title, ' (1부)')
+  await finishMeeting(p1.id, 30)
+  const p2 = await createMeeting('ko-KR', { groupId: p1.id, partIndex: 2 })
+  await finishMeeting(p2.id, 30)
+  const p3 = await createMeeting('ko-KR', { groupId: p1.id, partIndex: 3 })
+  await finishMeeting(p3.id, 30)
+  await appendAudioChunk(p3.id, 0, new Blob(['x']), 'audio/webm')
+
+  // softDeleteGroup: 그룹 전체가 목록에서 사라지고 삭제된 부 id를 반환한다(DB엔 남아있음)
+  const ids = await softDeleteGroup(p3)
+  expect([...ids].sort()).toEqual([p1.id, p2.id, p3.id].sort())
+  expect(await listMeetings()).toEqual([])
+  expect(await getMeeting(p1.id)).toBeDefined()
+
+  // restoreGroup: 그룹 전체가 다시 목록에 나타난다
+  await restoreGroup(ids)
+  expect((await listMeetings()).map(m => m.id).sort()).toEqual([...ids].sort())
+
+  // purgeGroup: 다시 삭제 후 하위 데이터까지 전부 하드 삭제된다
+  await softDeleteGroup(p3)
+  await purgeGroup(ids)
+  for (const id of ids) expect(await getMeeting(id)).toBeUndefined()
+  expect(await db.audioChunks.where('meetingId').equals(p3.id).count()).toBe(0)
+})
+
+test('purgeGroup은 restore된 부는 건드리지 않는다 (경합 방어)', async () => {
+  const p1 = await createMeeting()
+  await markGroupFirstPart(p1.id, p1.id, p1.title, ' (1부)')
+  await finishMeeting(p1.id, 30)
+  const p2 = await createMeeting('ko-KR', { groupId: p1.id, partIndex: 2 })
+  await finishMeeting(p2.id, 30)
+
+  const ids = await softDeleteGroup(p2)
+  await restoreGroup(ids) // 실행취소로 복구된 뒤
+  await purgeGroup(ids)   // 뒤늦게 만료 타이머가 발화해도 삭제되면 안 된다
+  expect((await listMeetings()).map(m => m.id).sort()).toEqual([...ids].sort())
+})
+
+test('softDeleteGroup은 미분할 회의면 자기 하나만 다룬다', async () => {
+  const solo = await createMeeting()
+  await finishMeeting(solo.id, 60)
+  const ids = await softDeleteGroup(solo)
+  expect(ids).toEqual([solo.id])
+  expect((await listMeetings()).map(m => m.id)).not.toContain(solo.id)
 })
 
 test('saveSummary는 템플릿당 최신 1개만 유지한다', async () => {

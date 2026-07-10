@@ -237,6 +237,32 @@ export async function purgeMeeting(id: string): Promise<void> {
 }
 
 /**
+ * 분할 그룹의 모든 부를 한꺼번에 soft-delete한다(홈 그룹 카드 삭제).
+ * 삭제된 부 id 배열을 반환 — 실행취소(restoreGroup)·만료 정리(purgeGroup)에 그대로 넘긴다.
+ * 미분할 회의면 [자기 자신 id]만 다룬다.
+ */
+export async function softDeleteGroup(meeting: Meeting): Promise<string[]> {
+  const ids = (await getMeetingGroup(meeting)).map(p => p.id)
+  const at = Date.now()
+  await db.transaction('rw', [db.meetings], async () => {
+    for (const id of ids) await db.meetings.update(id, { deletedAt: at })
+  })
+  return ids
+}
+
+/** softDeleteGroup을 취소하고 그룹의 모든 부를 다시 목록에 노출한다. */
+export async function restoreGroup(ids: string[]): Promise<void> {
+  await db.transaction('rw', [db.meetings], async () => {
+    for (const id of ids) await db.meetings.update(id, { deletedAt: undefined })
+  })
+}
+
+/** 그룹의 모든 부를 하드 삭제한다(각 부 purgeMeeting — soft-deleted일 때만, restore 경합 방어). */
+export async function purgeGroup(ids: string[]): Promise<void> {
+  for (const id of ids) await purgeMeeting(id)
+}
+
+/**
  * soft-deleted 회의를 기존 캐스케이드로 완전 삭제한다.
  * `olderThanMs`를 주면 그 시간보다 오래된 것만 지운다(실행취소 대기 중인 최신 삭제는 보존).
  */

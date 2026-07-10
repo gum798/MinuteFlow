@@ -6,14 +6,17 @@ import type { Meeting } from '../../core/types'
 import {
   listMeetings, findInterruptedMeetings, finalizeInterrupted,
   softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting, recoverOrphanAudio,
+  softDeleteGroup, restoreGroup, purgeGroup,
 } from '../../core/store/meetings'
 import { ensurePersistentStorage, getStorageBreakdown } from '../../core/store/storage'
 import { formatTimestamp } from '../../core/format'
 import { useUndoToast, UNDO_MS } from '../UndoToast'
 
 /**
- * 분할 회의를 그룹(groupId ?? id)으로 묶어 대표(마지막 부)와 전체 부 목록을 만든다.
- * 대표 = partIndex 최대인 부(통합 요약·AI 제목이 거기 붙는다). 미분할 회의는 자기 자신이 대표.
+ * 분할 회의를 그룹(groupId ?? id)으로 묶어 대표와 전체 부 목록을 만든다.
+ * 대표 = 완료(done)된 부 중 partIndex가 가장 큰 부(통합 요약·AI 제목이 거기 붙는다).
+ * 마지막 부가 아직 녹음 중이면 그 앞의 완료된 부를 대표로 삼는다. 완료된 부가 하나도 없는
+ * 그룹은 카드를 만들지 않는다(녹음 중 그룹은 복구 배너가 담당). 미분할 회의는 자기 자신이 대표.
  * 대표 createdAt 내림차순으로 정렬해 listMeetings의 최신순을 유지한다.
  */
 function groupRepresentatives(meetings: Meeting[]): { rep: Meeting; parts: Meeting[] }[] {
@@ -24,10 +27,12 @@ function groupRepresentatives(meetings: Meeting[]): { rep: Meeting; parts: Meeti
     if (arr) arr.push(m)
     else groups.set(key, [m])
   }
-  const result = [...groups.values()].map(parts => {
+  const result: { rep: Meeting; parts: Meeting[] }[] = []
+  for (const parts of groups.values()) {
     const sorted = [...parts].sort((a, b) => (a.partIndex ?? 1) - (b.partIndex ?? 1))
-    return { rep: sorted[sorted.length - 1], parts: sorted }
-  })
+    const rep = sorted.filter(m => m.status === 'done').at(-1)
+    if (rep) result.push({ rep, parts: sorted })
+  }
   return result.sort((a, b) => b.rep.createdAt - a.rep.createdAt)
 }
 
@@ -65,6 +70,7 @@ export default function Home() {
     navigate(`/meeting/${id}`)
   }
 
+  // 복구 배너의 단일(녹음 중) 회의 삭제 — 그룹과 무관하게 그 회의 하나만 처리한다.
   async function remove(id: string) {
     await softDeleteMeeting(id)
     await refresh()
@@ -75,8 +81,20 @@ export default function Home() {
     })
   }
 
-  // 분할 회의는 그룹당 대표(마지막 부) 1개만 카드로 노출한다.
-  const done = groupRepresentatives(meetings).filter(g => g.rep.status === 'done')
+  // 그룹 카드 삭제 — 분할 부 전체를 함께 지운다(대표만 지우면 통합 요약이 소실되고 나머지 부가 되살아난다).
+  // 미분할 회의면 softDeleteGroup이 [자기 자신]만 다루므로 동작이 동일하다.
+  async function removeGroup(rep: Meeting) {
+    const ids = await softDeleteGroup(rep)
+    await refresh()
+    showUndoToast({
+      message: '회의록을 삭제했어요.',
+      onUndo: () => { void (async () => { await restoreGroup(ids); await refresh() })() },
+      onExpire: () => { void purgeGroup(ids) },
+    })
+  }
+
+  // 분할 회의는 그룹당 대표(완료된 마지막 부) 1개만 카드로 노출한다.
+  const done = groupRepresentatives(meetings)
 
   return (
     <div>
@@ -131,7 +149,7 @@ export default function Home() {
                 <span className="muted">
                   {new Date(m.createdAt).toLocaleDateString('ko-KR')} · {formatTimestamp(m.durationSec)}
                 </span>
-                <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); void remove(m.id) }}>삭제</button>
+                <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); void removeGroup(m) }}>삭제</button>
               </div>
             </div>
           ))}
