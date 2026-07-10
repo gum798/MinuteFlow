@@ -42,13 +42,27 @@ test('라인이 청크 경계에 걸쳐 쪼개져도 정확히 파싱', async ()
   expect(out).toBe('나뉜 본문')
 })
 
-test('fetch가 throw(TypeError: Load failed)하면 친화적 네트워크 안내로 감싼다', async () => {
+test('fetch가 계속 throw(연결 실패)하면 재시도 소진 후 친화적 네트워크 안내로 감싼다', async () => {
   const fetchFn = vi.fn(async () => { throw new TypeError('Load failed') })
-  await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch }))
+  await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch, sleep: async () => {} }))
     .rejects.toThrow(/분할 녹음|다시 시도/)
+  expect(fetchFn).toHaveBeenCalledTimes(4) // 첫 요청 + 재시도 3회
   // 원시 'Load failed'가 그대로 새어나오지 않아야 한다.
-  await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch }))
+  await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch, sleep: async () => {} }))
     .rejects.not.toThrow(/Load failed/)
+})
+
+test('연결이 한 번 끊겼다 회복되면 재시도로 요약을 반환한다', async () => {
+  const fetchFn = vi.fn()
+    .mockRejectedValueOnce(new TypeError('네트워크 연결이 유실되었습니다'))
+    .mockResolvedValueOnce(sseResponse([dataEvent('회복됨')]))
+  const sleeps: number[] = []
+  const out = await summarizeWithGemini('p', 'k', {
+    fetchFn: fetchFn as unknown as typeof fetch, sleep: async ms => { sleeps.push(ms) },
+  })
+  expect(out).toBe('회복됨')
+  expect(fetchFn).toHaveBeenCalledTimes(2)
+  expect(sleeps).toEqual([1000])
 })
 
 test('400 API_KEY_INVALID는 스트림 열기 전 상태로 판정해 키 오류로', async () => {
