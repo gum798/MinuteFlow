@@ -132,7 +132,8 @@ export async function summarizeMeeting(meetingId: string, template: SummaryTempl
     // 제목이 자동 생성 기본값이면 AI에게 내용 기반 제목을 함께 요청한다(사용자 지정 제목은 불변).
     const wantTitle = isDefaultTitle(meeting.title)
     const prompt = buildSummaryPrompt(template, meeting, segments, { suggestTitle: wantTitle })
-    const raw = await summarizeWithGemini(prompt, apiKey)
+    // 스트리밍 누적 길이를 진행 표시로 — 긴 회의도 멈춘 듯 보이지 않게.
+    const raw = await summarizeWithGemini(prompt, apiKey, { onDelta: acc => setStatus(`요약 생성 중… (${acc.length}자)`) })
     const { title: aiTitle, body } = wantTitle ? extractSuggestedTitle(raw) : { title: null, body: raw }
     await saveSummary(meetingId, template, body, 'gemini-3.5-flash')
     // AI가 형식을 지켜 제목을 냈을 때만 반영 — 요약 도중 사용자가 제목을 고쳤으면(기본값 아님) 건드리지 않음.
@@ -173,7 +174,7 @@ export async function summarizeGroup(
     setStatus('통합 요약 중…')
     const wantTitle = isDefaultTitle(last.title)
     const prompt = buildGroupSummaryPrompt(template, parts, { suggestTitle: wantTitle })
-    const raw = await summarizeWithGemini(prompt, apiKey)
+    const raw = await summarizeWithGemini(prompt, apiKey, { onDelta: acc => setStatus(`통합 요약 생성 중… (${acc.length}자)`) })
     const { title: aiTitle, body } = wantTitle ? extractSuggestedTitle(raw) : { title: null, body: raw }
     await saveSummary(last.id, template, body, 'gemini-3.5-flash')
     if (wantTitle && aiTitle) {

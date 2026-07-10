@@ -1,25 +1,57 @@
 import { summarizeWithGemini } from './gemini'
 
-function ok(text: string) {
-  return new Response(JSON.stringify({
-    candidates: [{ content: { role: 'model', parts: [{ text: '## 요약\n' }, { text }] }, finishReason: 'STOP' }],
-  }), { status: 200 })
+// SSE 스트림 응답을 흉내낸다 — 각 chunk를 순서대로 흘려보내고 닫는다.
+function sseResponse(chunks: string[], status = 200) {
+  const enc = new TextEncoder()
+  const stream = new ReadableStream({
+    start(c) { for (const ch of chunks) c.enqueue(enc.encode(ch)); c.close() },
+  })
+  return new Response(stream, { status })
 }
 
-test('요청 형식과 다중 parts 결합', async () => {
-  const fetchFn = vi.fn(async () => ok('본문'))
-  const out = await summarizeWithGemini('프롬프트', 'AIza_1', { fetchFn: fetchFn as unknown as typeof fetch })
+// candidates 텍스트 하나를 담은 SSE data 이벤트를 만든다.
+function dataEvent(text: string) {
+  return `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text }] } }] })}\n\n`
+}
+
+test('요청은 SSE 스트리밍 엔드포인트로, 여러 이벤트를 누적 결합하고 onDelta를 갱신마다 호출', async () => {
+  const fetchFn = vi.fn(async () => sseResponse([dataEvent('## 요약\n'), dataEvent('본문')]))
+  const deltas: string[] = []
+  const out = await summarizeWithGemini('프롬프트', 'AIza_1', {
+    fetchFn: fetchFn as unknown as typeof fetch,
+    onDelta: acc => deltas.push(acc),
+  })
   const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit]
-  expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent')
+  expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse')
   const headers = init.headers as Record<string, string>
   expect(headers['x-goog-api-key']).toBe('AIza_1')
   expect(headers['Content-Type']).toBe('application/json')
   const body = JSON.parse(init.body as string)
   expect(body.contents[0].parts[0].text).toBe('프롬프트')
+  expect(body.generationConfig.temperature).toBe(0.3)
   expect(out).toBe('## 요약\n본문')
+  // onDelta는 텍스트가 붙을 때마다 누적본으로 호출된다.
+  expect(deltas).toEqual(['## 요약\n', '## 요약\n본문'])
 })
 
-test('400 API_KEY_INVALID는 키 오류로', async () => {
+test('라인이 청크 경계에 걸쳐 쪼개져도 정확히 파싱', async () => {
+  const full = dataEvent('나뉜 본문') // 하나의 data 이벤트
+  const cut = Math.floor(full.length / 2)
+  const fetchFn = vi.fn(async () => sseResponse([full.slice(0, cut), full.slice(cut)]))
+  const out = await summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch })
+  expect(out).toBe('나뉜 본문')
+})
+
+test('fetch가 throw(TypeError: Load failed)하면 친화적 네트워크 안내로 감싼다', async () => {
+  const fetchFn = vi.fn(async () => { throw new TypeError('Load failed') })
+  await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch }))
+    .rejects.toThrow(/분할 녹음|다시 시도/)
+  // 원시 'Load failed'가 그대로 새어나오지 않아야 한다.
+  await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch }))
+    .rejects.not.toThrow(/Load failed/)
+})
+
+test('400 API_KEY_INVALID는 스트림 열기 전 상태로 판정해 키 오류로', async () => {
   const fetchFn = vi.fn(async () => new Response(JSON.stringify({
     error: { code: 400, status: 'INVALID_ARGUMENT', details: [{ reason: 'API_KEY_INVALID' }] },
   }), { status: 400 }))
@@ -27,12 +59,12 @@ test('400 API_KEY_INVALID는 키 오류로', async () => {
     .rejects.toThrow(/API 키/)
 })
 
-test('429는 retryDelay만큼 대기 후 1회 재시도', async () => {
+test('429는 retryDelay만큼 대기 후 1회 재시도(스트리밍)', async () => {
   const fetchFn = vi.fn()
     .mockResolvedValueOnce(new Response(JSON.stringify({
       error: { code: 429, status: 'RESOURCE_EXHAUSTED', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '3s' }] },
     }), { status: 429 }))
-    .mockResolvedValueOnce(ok('성공'))
+    .mockResolvedValueOnce(sseResponse([dataEvent('## 요약\n'), dataEvent('성공')]))
   const sleeps: number[] = []
   const out = await summarizeWithGemini('p', 'k', {
     fetchFn: fetchFn as unknown as typeof fetch, sleep: async ms => { sleeps.push(ms) },
@@ -41,8 +73,9 @@ test('429는 retryDelay만큼 대기 후 1회 재시도', async () => {
   expect(out).toBe('## 요약\n성공')
 })
 
-test('candidates가 없으면 안전 필터 안내', async () => {
-  const fetchFn = vi.fn(async () => new Response(JSON.stringify({ promptFeedback: { blockReason: 'SAFETY' } }), { status: 200 }))
+test('candidates 없는 빈 스트림은 안전 필터 안내', async () => {
+  const blocked = `data: ${JSON.stringify({ promptFeedback: { blockReason: 'SAFETY' } })}\n\n`
+  const fetchFn = vi.fn(async () => sseResponse([blocked]))
   await expect(summarizeWithGemini('p', 'k', { fetchFn: fetchFn as unknown as typeof fetch }))
     .rejects.toThrow(/안전 필터/)
 })
