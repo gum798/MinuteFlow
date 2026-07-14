@@ -131,9 +131,15 @@ a { color: var(--accent); text-decoration: none; }
 .tabbar a.active { color: var(--accent); }
 
 /* 시그니처 — Dynamic Island 녹음 캡슐 */
-.island {
+/* 상단 상태 스택 — 녹음·재전사·화자 구분·요약 등 진행 중인 것들을 순서대로 쌓아 보여준다. */
+.status-stack {
   position: fixed; top: calc(10px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
-  z-index: 100; display: inline-flex; align-items: center; gap: 8px;
+  z-index: 100; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  pointer-events: none; /* 스택 사이 빈틈은 클릭 통과 */
+}
+.status-stack > * { pointer-events: auto; }
+.island {
+  display: inline-flex; align-items: center; gap: 8px;
   padding: 9px 18px; border-radius: 999px;
   background: var(--island); color: #fff;
   backdrop-filter: blur(var(--glass-blur)) saturate(180%);
@@ -145,8 +151,9 @@ a { color: var(--accent); text-decoration: none; }
 }
 .island-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--rec);
   animation: pulseDot 1.2s infinite; }
-@keyframes island-in { from { transform: translateX(-50%) translateY(-16px) scale(0.8); opacity: 0; }
-  to { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; } }
+.island-dot--job { background: #6ea8fe; } /* 작업(처리) 점은 파란색으로 녹음(빨강)과 구분 */
+@keyframes island-in { from { transform: translateY(-16px) scale(0.8); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; } }
 
 @media (max-width: 880px) {
   .sidebar { display: none; }

@@ -2,7 +2,7 @@ import { useSyncExternalStore, useEffect, useState, useRef } from 'react'
 import { NavLink, Link, Outlet } from 'react-router-dom'
 import { UndoToastProvider } from './UndoToast'
 import { subscribeRecording, getRecordingState } from '../core/recorder/session'
-import { subscribeJobs, getJobs } from '../core/jobs'
+import { subscribeJobs, getJobs, JOB_LABELS } from '../core/jobs'
 import { formatTimestamp } from '../core/format'
 import { reloadPage } from '../core/reload'
 
@@ -63,14 +63,18 @@ export default function AppShell() {
   }, [])
   return (
     <UndoToastProvider>
-      {phase !== 'idle' && (
-        <Link to="/record" className="island" aria-label="녹음 중 — 녹음 화면으로">
-          <span className="island-dot" />녹음 중 · {formatTimestamp(elapsedSec)}
-        </Link>
-      )}
-      {phase === 'idle' && busy && (
-        <div className="island" role="status" aria-label="회의 정리 중">
-          <span className="island-dot" />✨ 정리 중{jobs[0].status ? ` · ${jobs[0].status}` : '…'}
+      {(phase !== 'idle' || busy) && (
+        <div className="status-stack">
+          {phase !== 'idle' && (
+            <Link to="/record" className="island" aria-label="녹음 중 — 녹음 화면으로">
+              <span className="island-dot" />녹음 중 · {formatTimestamp(elapsedSec)}
+            </Link>
+          )}
+          {jobs.map((j, i) => (
+            <div key={`${j.meetingId}:${j.kind}:${i}`} className="island" role="status">
+              <span className="island-dot island-dot--job" />✨ {j.status || JOB_LABELS[j.kind]}
+            </div>
+          ))}
         </div>
       )}
       {pipelineMsg && (
