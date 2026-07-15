@@ -239,7 +239,7 @@ async function transcribeOnePart(
     })
   } else {
     source = 'whisper'
-    setStatus('브라우저 Whisper로 전사 중… (모델 다운로드가 필요할 수 있어요)')
+    setStatus('브라우저 Whisper로 전사 중…')
     segs = await engine.transcribe(samples, {
       model: webgpu ? settings.whisperModel : 'onnx-community/whisper-base',
       device: webgpu ? 'webgpu' : 'wasm',
