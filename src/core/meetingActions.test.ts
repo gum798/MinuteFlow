@@ -2,7 +2,7 @@ import { db } from './store/db'
 import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting, saveSummary } from './store/meetings'
 import { saveSettings } from './settings'
 import { __resetJobsForTests } from './jobs'
-import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, retranscribeGroup, diarizeMeeting, diarizeGroup, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases, stripHallucinationPhrases, isTooLongToProcess, MAX_PROCESS_SEC } from './meetingActions'
+import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, retranscribeGroup, diarizeMeeting, diarizeGroup, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases, collapseRepeatedTokenRuns, cleanTranscriptSegments, stripHallucinationPhrases, isTooLongToProcess, MAX_PROCESS_SEC } from './meetingActions'
 
 // 재전사 경로가 실제 Whisper/오디오 디코딩을 돌리지 않도록 목으로 대체한다.
 vi.mock('./audio/decode', () => ({
@@ -261,12 +261,26 @@ test('dropHallucinatedRepeats: 짧은 문구 4회+ 반복은 환각으로 제거
   expect(out.map(s => s.text)).toEqual(['안녕하세요 회의를 시작합니다', '다음 안건으로 넘어가죠'])
 })
 
-test('dropHallucinatedRepeats: 3회 이하 반복이나 긴 문구는 보존', () => {
+test('dropHallucinatedRepeats: 3회 이하 반복은 보존', () => {
   const segs = [
-    { text: '네' }, { text: '네' }, { text: '네' }, // 3회 — 보존
-    { text: '정말 감사합니다' }, { text: '정말 감사합니다' }, { text: '정말 감사합니다' }, { text: '정말 감사합니다' }, // 긴 문구(>6자) — 보존
+    { text: '네' }, { text: '네' }, { text: '네' }, // 짧은 조각 3회 — 보존
+    { text: '3을 호출하면 이것만 줘요' }, { text: '3을 호출하면 이것만 줘요' }, { text: '3을 호출하면 이것만 줘요' }, // 긴 문장 3회 — 보존
   ]
-  expect(dropHallucinatedRepeats(segs)).toHaveLength(7)
+  expect(dropHallucinatedRepeats(segs)).toHaveLength(6)
+})
+
+test('dropHallucinatedRepeats: 긴 문장 4회+ 반복은 첫 1개만 남긴다', () => {
+  const segs = [
+    { text: '2를 호출하면 이것만 줘요.' },
+    { text: '3을 호출하면 이것만 줘요.' }, { text: '3을 호출하면 이것만 줘요.' },
+    { text: '3을 호출하면 이것만 줘요.' }, { text: '3을 호출하면 이것만 줘요.' },
+    { text: '2를 호출하면 이게 나와야 합니다.' },
+  ]
+  expect(dropHallucinatedRepeats(segs).map(s => s.text)).toEqual([
+    '2를 호출하면 이것만 줘요.',
+    '3을 호출하면 이것만 줘요.',
+    '2를 호출하면 이게 나와야 합니다.',
+  ])
 })
 
 test('dropHallucinatedRepeats: 공백/구두점 차이는 같은 조각으로 본다', () => {
@@ -295,6 +309,70 @@ describe('collapseRepeatedPhrases', () => {
     expect(collapseRepeatedPhrases('')).toBe('')
     expect(collapseRepeatedPhrases('안녕하세요')).toBe('안녕하세요')
     expect(collapseRepeatedPhrases('오늘 회의를 시작하겠습니다.')).toBe('오늘 회의를 시작하겠습니다.')
+  })
+})
+
+describe('collapseRepeatedTokenRuns', () => {
+  test('같은 토큰이 6회 이상 연속되면 앞 2개+마지막 1개만 남긴다', () => {
+    expect(collapseRepeatedTokenRuns('그리고 ' + '15, '.repeat(60) + '네.'))
+      .toBe('그리고 15, 15, 15, 네.')
+  })
+
+  test('마지막 토큰을 남겨 반복 끝의 구두점을 보존한다', () => {
+    expect(collapseRepeatedTokenRuns('점수는 ' + '삼, '.repeat(99) + '삼.'))
+      .toBe('점수는 삼, 삼, 삼.')
+  })
+
+  test('5회 이하 반복은 실제 발화로 보고 보존한다', () => {
+    expect(collapseRepeatedTokenRuns('10, 10, 10, 10, 10 나왔어요')).toBe('10, 10, 10, 10, 10 나왔어요')
+    expect(collapseRepeatedTokenRuns('네 네 네 알겠습니다')).toBe('네 네 네 알겠습니다')
+  })
+
+  test('서로 다른 토큰의 나열(증가하는 숫자 등)은 건드리지 않는다', () => {
+    expect(collapseRepeatedTokenRuns('1, 2, 3, 4, 5, 6, 7, 8')).toBe('1, 2, 3, 4, 5, 6, 7, 8')
+  })
+
+  test('긴 텍스트 속 여러 반복 구간을 각각 축약한다', () => {
+    expect(collapseRepeatedTokenRuns('그리고 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 7'))
+      .toBe('그리고 3, 4, 4, 4, 4, 5, 5, 5, 6, 7')
+  })
+
+  test('빈 텍스트·단문은 그대로 둔다', () => {
+    expect(collapseRepeatedTokenRuns('')).toBe('')
+    expect(collapseRepeatedTokenRuns('안녕하세요')).toBe('안녕하세요')
+  })
+
+  test('구두점 없는 여러 토큰 주기 반복(예: "이것만 줘요"×30)은 3주기만 남긴다', () => {
+    expect(collapseRepeatedTokenRuns('이것만 줘요 '.repeat(30).trim()))
+      .toBe('이것만 줘요 이것만 줘요 이것만 줘요')
+  })
+
+  test('여러 토큰 주기의 앞뒤 문맥은 보존한다', () => {
+    expect(collapseRepeatedTokenRuns('그러니까 ' + '3을 호출하면 이것만 줘요 '.repeat(10) + '알겠죠'))
+      .toBe('그러니까 3을 호출하면 이것만 줘요 3을 호출하면 이것만 줘요 3을 호출하면 이것만 줘요 알겠죠')
+  })
+
+  test('여러 토큰 주기 3회 이하 반복은 실제 발화로 보고 보존한다', () => {
+    expect(collapseRepeatedTokenRuns('네 알겠습니다 네 알겠습니다 네 알겠습니다'))
+      .toBe('네 알겠습니다 네 알겠습니다 네 알겠습니다')
+  })
+})
+
+describe('cleanTranscriptSegments', () => {
+  test('환각 문구 제거·토큰/문장 반복 축약·무의미 필터·세그먼트 반복 제거를 한 번에 적용한다', () => {
+    const segs = [
+      { startSec: 0, endSec: 2, text: '시청해주셔서 감사합니다.' }, // 알려진 환각 → 제거 후 빈 문자열 → 필터
+      { startSec: 2, endSec: 4, text: '회의를 시작하겠습니다.' },
+      { startSec: 4, endSec: 6, text: '점수는 ' + '15, '.repeat(60) + '이렇게 나왔어요.' }, // 토큰 반복 → 축약
+      { startSec: 6, endSec: 8, text: '3을 호출하면 이것만 줘요.' }, { startSec: 8, endSec: 10, text: '3을 호출하면 이것만 줘요.' },
+      { startSec: 10, endSec: 12, text: '3을 호출하면 이것만 줘요.' }, { startSec: 12, endSec: 14, text: '3을 호출하면 이것만 줘요.' }, // 긴 문장 4회 → 첫 1개
+      { startSec: 14, endSec: 16, text: '-' }, // 무의미 → 필터
+    ]
+    expect(cleanTranscriptSegments(segs).map(s => s.text)).toEqual([
+      '회의를 시작하겠습니다.',
+      '점수는 15, 15, 15, 이렇게 나왔어요.',
+      '3을 호출하면 이것만 줘요.',
+    ])
   })
 })
 

@@ -44,9 +44,11 @@ export function isTooLongToProcess(durationSec: number): boolean {
   return durationSec > MAX_PROCESS_SEC
 }
 
-// Whisper는 무음·잡음 구간에서 같은 짧은 문구를 규칙적으로 반복 출력하는 환각을 낸다("지금 지금 지금…").
-// 정규화한 텍스트가 직전과 같은 짧은(≤6자) 조각이 REPEAT_RUN회 이상 연달아 나오면 그 연속을 통째로 제거한다.
-// 실제 대화의 자연스러운 반복(예: "네 네")까지 지우지 않도록 임계를 보수적으로(4회) 둔다.
+// Whisper는 무음·잡음 구간에서 같은 문구를 규칙적으로 반복 출력하는 환각을 낸다("지금 지금 지금…").
+// 정규화한 텍스트가 같은 세그먼트가 REPEAT_RUN회 이상 연달아 나오면:
+//  - 짧은(≤6자) 조각은 실제 발화일 가능성이 낮아 그 연속을 통째로 제거하고,
+//  - 긴 문장("3을 호출하면 이것만 줘요" 등)은 첫 발화는 실제일 수 있으니 첫 1개만 남긴다.
+// 실제 대화의 자연스러운 반복(예: "네 네", 같은 문장 2~3회)까지 지우지 않도록 임계를 보수적으로(4회) 둔다.
 const REPEAT_RUN = 4
 const SHORT_LEN = 6
 const norm = (t: string): string => t.replace(MEANINGLESS_RE, '')
@@ -60,8 +62,9 @@ export function dropHallucinatedRepeats<T extends { text: string }>(segments: T[
     let j = i + 1
     while (j < segments.length && norm(segments[j].text) === key) j++
     const runLen = j - i
-    // 짧은 조각이 4회 이상 반복 → 환각으로 보고 전부 버린다. 그 외에는 보존.
-    if (key.length > 0 && key.length <= SHORT_LEN && runLen >= REPEAT_RUN) {
+    // 4회 이상 반복 → 환각: 짧은 조각은 전부, 긴 문장은 첫 1개만 남기고 버린다. 그 외에는 보존.
+    if (key.length > 0 && runLen >= REPEAT_RUN) {
+      if (key.length > SHORT_LEN) out.push(segments[i])
       i = j
       continue
     }
@@ -69,6 +72,59 @@ export function dropHallucinatedRepeats<T extends { text: string }>(segments: T[
     i = j
   }
   return out
+}
+
+// 한 세그먼트 text 안에서 같은 토큰·구절이 수십~수백 번 이어지는 환각
+// ("15, 15, 15, …", "삼, 삼, 삼, …", "이것만 줘요 이것만 줘요 …").
+// 문장 구두점이 없어 collapseRepeatedPhrases(문장 단위)로는 잡히지 않는다. 공백으로 토큰을 나눠,
+// 정규화(공백·구두점 제거)한 토큰열에서 길이 1~MAX_CYCLE_LEN의 주기가 임계 이상 반복되면
+// 앞 2주기+마지막 1주기만 남긴다(마지막 주기를 남겨 반복 끝의 구두점을 보존).
+// 실제 반복은 단일 토큰이 4~5회("10, 10, 10, 10" 점수 낭독), 구절이 2~3회를 넘지 않으므로
+// 임계를 그 위(토큰 6회, 구절 4회)에 둔다. 축약이 없으면 원문을 그대로 반환한다.
+const TOKEN_REPEAT_RUN = 6
+const CYCLE_REPEAT_RUN = 4
+const MAX_CYCLE_LEN = 5
+
+// keys[start..]에서 길이 cycleLen의 주기가 몇 번 연속 반복되는지 센다(첫 주기 포함).
+function countCycleRepeats(keys: string[], start: number, cycleLen: number): number {
+  let repeats = 1
+  while (start + (repeats + 1) * cycleLen <= keys.length) {
+    let same = true
+    for (let m = 0; m < cycleLen; m++) {
+      if (keys[start + repeats * cycleLen + m] !== keys[start + m]) { same = false; break }
+    }
+    if (!same) break
+    repeats++
+  }
+  return repeats
+}
+
+export function collapseRepeatedTokenRuns(text: string): string {
+  const tokens = text.split(/\s+/).filter(t => t.length > 0)
+  if (tokens.length < TOKEN_REPEAT_RUN) return text
+  const keys = tokens.map(norm)
+  const out: string[] = []
+  let changed = false
+  let i = 0
+  while (i < tokens.length) {
+    let collapsed = false
+    for (let cycleLen = 1; cycleLen <= MAX_CYCLE_LEN && i + cycleLen <= tokens.length; cycleLen++) {
+      const minRepeats = cycleLen === 1 ? TOKEN_REPEAT_RUN : CYCLE_REPEAT_RUN
+      const repeats = countCycleRepeats(keys, i, cycleLen)
+      if (repeats < minRepeats) continue
+      // 주기가 전부 구두점뿐이면(빈 키) 실제 텍스트가 아니므로 건드리지 않는다.
+      if (!keys.slice(i, i + cycleLen).some(k => k.length > 0)) continue
+      for (let m = 0; m < cycleLen; m++) out.push(tokens[i + m])
+      for (let m = 0; m < cycleLen; m++) out.push(tokens[i + cycleLen + m])
+      for (let m = 0; m < cycleLen; m++) out.push(tokens[i + (repeats - 1) * cycleLen + m])
+      i += repeats * cycleLen
+      changed = true
+      collapsed = true
+      break
+    }
+    if (!collapsed) { out.push(tokens[i]); i++ }
+  }
+  return changed ? out.join(' ') : text
 }
 
 // 한 세그먼트 text 안에서 같은 문장이 연달아 붙는 환각("다음 영상에서 만나요. 다음 영상에서 만나요. …").
@@ -132,6 +188,18 @@ export function stripHallucinationPhrases(text: string): string {
   return kept.join('').trim()
 }
 
+/**
+ * Whisper/Groq 전사 결과의 반복·환각 후처리 체인(재전사·업로드 공용):
+ * 환각 문구 제거 → 토큰 반복 축약 → 세그먼트 내부 문장 반복 축약 → 무의미 조각 필터 → 세그먼트 간 반복 제거.
+ */
+export function cleanTranscriptSegments<T extends { text: string }>(segs: T[]): T[] {
+  const collapsed = segs.map(s => {
+    const text = collapseRepeatedPhrases(collapseRepeatedTokenRuns(stripHallucinationPhrases(s.text)))
+    return text === s.text ? s : { ...s, text }
+  })
+  return dropHallucinatedRepeats(collapsed.filter(s => isMeaningfulText(s.text)))
+}
+
 // 오디오를 디코딩하되, 실패하면 헤더 잃은 WebM으로 보고 1회 자동 수선을 시도한다.
 // 수선 성공 시 수선본을 스토어에 저장해 이후 다운로드/재생/전사도 정상화한다.
 async function decodeMeetingAudioWithRepair(meetingId: string, blob: Blob): Promise<Float32Array> {
@@ -178,9 +246,7 @@ async function transcribeOnePart(
       language: settings.language,
     }, p => { if (p.kind === 'status') setStatus(p.message) })
   }
-  // 환각 문구 제거 → 세그먼트 내부 반복 축약 → 무의미 조각 필터 → 세그먼트 간 반복 환각 제거.
-  const collapsed = segs.map(s => ({ ...s, text: collapseRepeatedPhrases(stripHallucinationPhrases(s.text)) }))
-  const meaningful = dropHallucinatedRepeats(collapsed.filter(s => isMeaningfulText(s.text)))
+  const meaningful = cleanTranscriptSegments(segs)
   dlog('retranscribe', `세그먼트 ${meaningful.length}개(원본 ${segs.length})`)
   if (meaningful.length === 0) return 'empty'
   await replaceSegments(meetingId, meaningful.map(s => ({
