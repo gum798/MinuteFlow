@@ -22,3 +22,16 @@ test('임베딩이 하나도 없으면 각 부 빈 배열', () => {
   const out = globalSpeakerRegions([{ targets: [], embeddings: [], offsetSec: 0 }])
   expect(out).toEqual([[]])
 })
+
+test('numSpeakers를 주면 그 수까지 강제 병합한다', () => {
+  // 서로 직교(유사도 0)인 세 화자도 numSpeakers=1이면 전부 SPK1.
+  const parts = [
+    {
+      targets: [{ start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }],
+      embeddings: [new Float32Array([1, 0, 0]), new Float32Array([0, 1, 0]), new Float32Array([0, 0, 1])],
+      offsetSec: 0,
+    },
+  ]
+  const out = globalSpeakerRegions(parts, 1)
+  expect(out[0].map(r => r.speaker)).toEqual(['SPK1', 'SPK1', 'SPK1'])
+})

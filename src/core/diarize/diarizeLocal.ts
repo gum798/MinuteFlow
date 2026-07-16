@@ -19,7 +19,7 @@ export class DiarizeEngine {
 
   constructor(private createWorker: () => Worker = defaultCreateWorker) {}
 
-  diarize(audio: Float32Array, onProgress?: (p: WhisperProgress) => void): Promise<SpeakerRegion[]> {
+  diarize(audio: Float32Array, onProgress?: (p: WhisperProgress) => void, numSpeakers?: number): Promise<SpeakerRegion[]> {
     if (this.busy) return Promise.reject(new Error('이미 화자 분리가 진행 중입니다.'))
     this.busy = true
     this.worker ??= this.createWorker()
@@ -43,7 +43,7 @@ export class DiarizeEngine {
           reject(new Error(msg.message))
         }
       }
-      worker.postMessage({ type: 'diarize', audio })
+      worker.postMessage({ type: 'diarize', audio, numSpeakers })
     })
   }
 

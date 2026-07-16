@@ -1,5 +1,5 @@
 import { db } from './store/db'
-import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting, saveSummary } from './store/meetings'
+import { createMeeting, appendSegment, appendAudioChunk, finishMeeting, getSegments, getSummaries, getMeeting, saveSummary, updateSpeakerNames } from './store/meetings'
 import { saveSettings } from './settings'
 import { __resetJobsForTests } from './jobs'
 import { isMeaningfulText, hasMeaningfulTranscript, retranscribeMeeting, retranscribeGroup, diarizeMeeting, diarizeGroup, summarizeMeeting, summarizeGroup , dropHallucinatedRepeats, collapseRepeatedPhrases, collapseRepeatedTokenRuns, cleanTranscriptSegments, stripHallucinationPhrases, isTooLongToProcess, MAX_PROCESS_SEC } from './meetingActions'
@@ -17,9 +17,10 @@ vi.mock('./stt/whisperLocal', () => ({
   },
 }))
 let extractCalls = 0
+const diarizeMock = vi.fn(async (..._args: unknown[]) => [{ start: 0, end: 1, speaker: 'SPK1' }])
 vi.mock('./diarize/diarizeLocal', () => ({
   DiarizeEngine: class {
-    diarize() { return [] }
+    diarize(...args: unknown[]) { return diarizeMock(...args) }
     extract() {
       // 부0: 2발화(서로 다른 화자), 부1: 1발화(부0 첫 화자와 동일 임베딩)
       extractCalls++
@@ -43,6 +44,7 @@ vi.mock('./summarize/gemini', () => ({
 beforeEach(async () => {
   localStorage.clear()
   extractCalls = 0
+  diarizeMock.mockClear()
   transcribeMock.mockReset().mockResolvedValue([{ startSec: 0, endSec: 1, text: '-' }])
   geminiMock.mockClear()
   __resetJobsForTests()
@@ -107,6 +109,38 @@ test("너무 긴 녹음은 화자 구분도 'too-long'을 반환한다", async (
   await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
   await finishMeeting(m.id, MAX_PROCESS_SEC + 1)
   expect(await diarizeMeeting(m.id)).toBe('too-long')
+})
+
+test('화자 구분은 이전 화자 이름 지정을 초기화하고 numSpeakers를 엔진에 넘긴다', async () => {
+  const m = await createMeeting()
+  await appendSegment({ meetingId: m.id, startSec: 0, endSec: 1, text: '발언', source: 'whisper', isFinal: true })
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  await finishMeeting(m.id, 60)
+  await updateSpeakerNames(m.id, { SPK1: '김팀장', SPK3: '박대리' })
+
+  expect(await diarizeMeeting(m.id, 3)).toBe('done')
+
+  // 라벨 의미가 바뀌었으므로 옛 이름 지정은 무효 — 초기화된다.
+  expect((await getMeeting(m.id))?.speakerNames).toEqual({})
+  // numSpeakers는 세 번째 인자로 엔진에 전달된다.
+  expect(diarizeMock.mock.calls[0][2]).toBe(3)
+})
+
+test('diarizeGroup도 각 부의 화자 이름 지정을 초기화한다', async () => {
+  const m1 = await createMeeting()
+  const m2 = await createMeeting()
+  await appendSegment({ meetingId: m1.id, startSec: 0, endSec: 4, text: '발언', source: 'whisper', isFinal: true })
+  await appendSegment({ meetingId: m2.id, startSec: 0, endSec: 4, text: '발언', source: 'whisper', isFinal: true })
+  await appendAudioChunk(m1.id, 0, new Blob(['a']), 'audio/webm')
+  await appendAudioChunk(m2.id, 0, new Blob(['a']), 'audio/webm')
+  await finishMeeting(m1.id, 60)
+  await finishMeeting(m2.id, 60)
+  await updateSpeakerNames(m1.id, { SPK2: '이과장' })
+
+  expect(await diarizeGroup([m1.id, m2.id])).toBe('done')
+
+  expect((await getMeeting(m1.id))?.speakerNames).toEqual({})
+  expect((await getMeeting(m2.id))?.speakerNames).toEqual({})
 })
 
 test('diarizeGroup: 부 경계를 넘어 같은 화자에 같은 라벨을 부여한다', async () => {

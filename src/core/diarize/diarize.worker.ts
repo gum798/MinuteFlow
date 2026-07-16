@@ -76,9 +76,9 @@ async function extractRegionsAndEmbeddings(audio: Float32Array, progress: (x: Pr
   return { targets: targets.map(t => ({ start: t.start, end: t.end })), embeddings }
 }
 
-self.onmessage = async (ev: MessageEvent<{ type: 'diarize' | 'extract'; audio: Float32Array }>) => {
+self.onmessage = async (ev: MessageEvent<{ type: 'diarize' | 'extract'; audio: Float32Array; numSpeakers?: number }>) => {
   try {
-    const { type, audio } = ev.data
+    const { type, audio, numSpeakers } = ev.data
     const progress = (x: ProgressEvent) => {
       if (x.status === 'progress') self.postMessage({ status: 'progress', file: x.file ?? '', progress: x.progress ?? 0 })
     }
@@ -90,7 +90,7 @@ self.onmessage = async (ev: MessageEvent<{ type: 'diarize' | 'extract'; audio: F
     // type === 'diarize' — 단일 회의 전체 파이프라인(기존 동작)
     if (targets.length === 0) { self.postMessage({ status: 'done', regions: [] }); return }
     self.postMessage({ status: 'info', message: '화자 묶는 중…' })
-    const idx = clusterEmbeddings(embeddings)
+    const idx = clusterEmbeddings(embeddings, { numSpeakers, durations: targets.map(t => t.end - t.start) })
     const labels = labelClusters(idx, targets.map(t => t.start))
     const result: SpeakerRegion[] = targets
       .map((r, i) => ({ start: r.start, end: r.end, speaker: labels[i] }))

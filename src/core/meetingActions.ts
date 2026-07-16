@@ -316,7 +316,7 @@ export async function retranscribeGroup(partIds: string[]): Promise<'done' | 'em
  * 화자 구분. 성공 시 세그먼트에 speaker를 입힌다.
  * 오디오가 없으면 'no-audio', 화자 결과가 비면 'empty', 그 외 'done'.
  */
-export async function diarizeMeeting(meetingId: string): Promise<'done' | 'empty' | 'no-audio' | 'too-long'> {
+export async function diarizeMeeting(meetingId: string, numSpeakers?: number): Promise<'done' | 'empty' | 'no-audio' | 'too-long'> {
   // 재전사와 동일하게 너무 긴 녹음은 디코딩 불가 → 화자 구분도 건너뛴다.
   const meeting = await getMeeting(meetingId)
   if (meeting && isTooLongToProcess(meeting.durationSec)) return 'too-long'
@@ -329,9 +329,12 @@ export async function diarizeMeeting(meetingId: string): Promise<'done' | 'empty
       if (!blob) { result = 'no-audio'; return }
       const samples = await decodeMeetingAudioWithRepair(meetingId, blob)
       setStatus('화자 구분 중…')
-      const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setStatus(p.message) })
+      const regions = await engine.diarize(samples, p => { if (p.kind === 'status') setStatus(p.message) }, numSpeakers)
       if (regions.length === 0) { result = 'empty'; return }
       await applySpeakers(meetingId, regions)
+      // 클러스터 구성이 바뀌면 라벨(SPK1..)의 의미도 바뀐다 — 옛 라벨에 지정한 이름이
+      // 엉뚱한 화자에 붙지 않도록 재전사와 동일하게 이름 맵을 초기화한다.
+      await updateSpeakerNames(meetingId, {})
       result = 'done'
     } finally {
       engine.dispose()
@@ -346,7 +349,7 @@ export async function diarizeMeeting(meetingId: string): Promise<'done' | 'empty
  * 엔진은 1회만 로드. 한 부 디코딩/추출 실패는 그 부만 건너뛴다.
  * 반환: 'done' | 'empty'(임베딩 없음) | 'no-audio'(오디오 있는 부가 없음).
  */
-export async function diarizeGroup(partIds: string[]): Promise<'done' | 'empty' | 'no-audio'> {
+export async function diarizeGroup(partIds: string[], numSpeakers?: number): Promise<'done' | 'empty' | 'no-audio'> {
   const lastId = partIds[partIds.length - 1]
   let result: 'done' | 'empty' | 'no-audio' = 'no-audio'
   await runJob(lastId, 'diarize', async setStatus => {
@@ -383,12 +386,13 @@ export async function diarizeGroup(partIds: string[]): Promise<'done' | 'empty' 
       if (total === 0) { result = 'empty'; return }
       setStatus('화자 묶는 중…')
       const endCluster = dtimer('diarizeGroup', '전역 클러스터링')
-      const perPartRegions = globalSpeakerRegions(parts.map(p => ({ targets: p.targets, embeddings: p.embeddings, offsetSec: p.offsetSec })))
+      const perPartRegions = globalSpeakerRegions(parts.map(p => ({ targets: p.targets, embeddings: p.embeddings, offsetSec: p.offsetSec })), numSpeakers)
       endCluster()
       const speakerCount = new Set(perPartRegions.flat().map(r => r.speaker)).size
       dlog('diarizeGroup', `전역 화자 ${speakerCount}명 (임베딩 ${total}개)`)
       for (let i = 0; i < parts.length; i++) {
         await applySpeakers(parts[i].partId, perPartRegions[i])
+        await updateSpeakerNames(parts[i].partId, {}) // 라벨 의미가 바뀌므로 옛 이름 지정 무효화
       }
       result = 'done'
     } finally {

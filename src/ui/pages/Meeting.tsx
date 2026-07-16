@@ -53,11 +53,14 @@ export default function MeetingPage() {
   // 이름 변경 중인 화자 라벨(예: 'SPK1'). 값이 있으면 화자 이름 팝업을 띄운다. renameInput은 그 입력값.
   const [renamingSpeaker, setRenamingSpeaker] = useState<string | null>(null)
   const [renameInput, setRenameInput] = useState('')
+  // 사용자가 아는 화자 수(선택). 비우면 자동 판별, 지정하면 그 수까지 강제 병합한다.
+  const [numSpeakers, setNumSpeakers] = useState('')
   // 재전사·화자 구분·요약은 전역 작업 스토어에 산다 → 페이지를 떠났다 와도 진행 상태가 유지된다.
   const jobs = useSyncExternalStore(subscribeJobs, getJobs)
 
   useEffect(() => {
     if (!id) return
+    setNumSpeakers('') // 회의가 바뀌면 이전 회의에서 지정한 화자 수가 새 회의로 새지 않게 초기화
     void (async () => {
       const m = await getMeeting(id)
       setMeeting(m ?? null)
@@ -191,13 +194,15 @@ export default function MeetingPage() {
 
   async function diarize() {
     if (!meeting) return
+    const n = parseInt(numSpeakers, 10)
+    const wanted = Number.isInteger(n) && n >= 1 && n <= 99 ? n : undefined
     // 성공 시 세그먼트·회의 재로드는 job-done 리스너가 담당. 오류는 runJob이 알림으로 넘긴다.
     // 통합 뷰에선 부가 여럿이면 전체를 통합 화자 구분(부 경계 넘어 일관된 화자 라벨).
     if (group.length > 1) {
-      if (await diarizeGroup(group.map(p => p.id)) === 'empty') window.alert('화자를 구분할 수 없었습니다.')
+      if (await diarizeGroup(group.map(p => p.id), wanted) === 'empty') window.alert('화자를 구분할 수 없었습니다.')
       return
     }
-    const result = await diarizeMeeting(meeting.id)
+    const result = await diarizeMeeting(meeting.id, wanted)
     if (result === 'empty') window.alert('화자를 구분할 수 없었습니다.')
     else if (result === 'too-long') window.alert('녹음이 너무 길어(2시간 초과) 브라우저에서 화자 구분을 할 수 없어요.')
   }
@@ -342,9 +347,23 @@ export default function MeetingPage() {
                   {job?.kind === 'retranscribe' ? job.status : '고품질 재전사'}
                 </button>
                 {segments.length > 0 && (
-                  <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void diarize()}>
-                    {job?.kind === 'diarize' ? job.status : '화자 구분'}
-                  </button>
+                  <>
+                    <button className="btn btn-outline btn-sm" disabled={job !== null} onClick={() => void diarize()}>
+                      {job?.kind === 'diarize' ? job.status : '화자 구분'}
+                    </button>
+                    <input
+                      className="input"
+                      style={{ width: 110 }}
+                      type="number"
+                      min={1}
+                      max={99}
+                      placeholder="화자 수(자동)"
+                      aria-label="화자 수"
+                      disabled={job !== null}
+                      value={numSpeakers}
+                      onChange={e => setNumSpeakers(e.target.value)}
+                    />
+                  </>
                 )}
                 <span className="hint">{GROQ_ENABLED && loadSettings().groqApiKey ? 'Groq 사용' : '브라우저 Whisper 사용'}</span>
               </>

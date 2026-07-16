@@ -11,17 +11,19 @@ export interface PartExtract {
   offsetSec: number
 }
 
-export function globalSpeakerRegions(parts: PartExtract[]): SpeakerRegion[][] {
+export function globalSpeakerRegions(parts: PartExtract[], numSpeakers?: number): SpeakerRegion[][] {
   const allEmb: Float32Array[] = []
   const globalStarts: number[] = []
+  const durations: number[] = []
   for (const p of parts) {
     for (let i = 0; i < p.embeddings.length; i++) {
       allEmb.push(p.embeddings[i])
       globalStarts.push(p.targets[i].start + p.offsetSec)
+      durations.push(p.targets[i].end - p.targets[i].start)
     }
   }
   if (allEmb.length === 0) return parts.map(() => [])
-  const idx = clusterEmbeddings(allEmb)
+  const idx = clusterEmbeddings(allEmb, { numSpeakers, durations })
   const labels = labelClusters(idx, globalStarts) // 전역 시각 기준 SPK 라벨
   // 라벨을 다시 부별로 분배(추출 순서와 동일)하고, 부-상대 시각으로 SpeakerRegion을 만든다.
   const out: SpeakerRegion[][] = []

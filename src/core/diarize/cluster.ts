@@ -9,38 +9,164 @@ export function cosineSim(a: Float32Array | number[], b: Float32Array | number[]
   return denom === 0 ? 0 : dot / denom
 }
 
-// average-linkage agglomerative: 쌍별 유사도 평균이 threshold 이상인 동안 병합
-export function clusterEmbeddings(embeddings: Float32Array[], threshold = 0.75): number[] {
+export interface ClusterOpts {
+  /** 평균 연결 병합을 멈추는 코사인 유사도 하한. numSpeakers가 있으면 무시된다. */
+  threshold?: number
+  /** 사용자가 아는 화자 수 — 임계와 무관하게 이 수까지 병합한다(pyannote의 num_speakers와 동일). */
+  numSpeakers?: number
+  /** 각 임베딩 구간의 발화 길이(초). 작은 클러스터 흡수·대형 회의 상한에 쓰인다. */
+  durations?: number[]
+  /** O(n²) 유사도 행렬 메모리 상한 — 초과 시 긴 구간만 클러스터링하고 나머지는 센트로이드 배정. */
+  maxRegions?: number
+}
+
+// 짧은 구간(1~3초) 임베딩 + uint8 양자화 모델에선 같은 화자 쌍 유사도가 0.5~0.75로 내려앉고
+// 다른 화자는 0~0.4에 머문다(검증 발화 기준 0.9/0.5와 다름). 0.55는 그 사이 골짜기 값.
+// 과분할이 여전하면 내리고, 서로 다른 화자가 합쳐지면 올리는 튜닝 지점.
+const DEFAULT_THRESHOLD = 0.55
+// pyannote min_cluster_size 이식: 총 발화가 이보다 짧은 클러스터는 잡음·맞장구로 보고
+// 가장 비슷한 큰 클러스터로 흡수한다. 단 유사도가 ABSORB_MIN_SIM 미만이면 짧아도 뚜렷한
+// 화자로 보고 유지한다(3화자를 2화자로 뭉개는 것이 라벨 몇 개 남는 것보다 나쁨).
+const SMALL_CLUSTER_SEC = 6
+const ABSORB_MIN_SIM = 0.45
+// n=2500이면 유사도 행렬(Float32) ≈ 24MB. 15시간급 회의도 이 안에서 병합이 수 초에 끝난다.
+const MAX_CLUSTER_REGIONS = 2500
+
+function toUnit(e: Float32Array | number[]): Float32Array {
+  let norm = 0
+  for (let i = 0; i < e.length; i++) norm += e[i] * e[i]
+  norm = Math.sqrt(norm)
+  const out = new Float32Array(e.length)
+  if (norm === 0) return out
+  for (let i = 0; i < e.length; i++) out[i] = e[i] / norm
+  return out
+}
+
+// 클러스터 멤버들의 단위벡터 평균(정규화 안 함 — cosineSim이 크기를 무시하므로 충분).
+function centroidOf(unit: Float32Array[], members: number[]): Float32Array {
+  const c = new Float32Array(unit[0].length)
+  for (const m of members) for (let i = 0; i < c.length; i++) c[i] += unit[m][i]
+  return c
+}
+
+// 평균 연결 병합 본체. 쌍별 평균 유사도는 크기 가중 평균으로 정확히 증분 갱신된다
+// (Lance-Williams): merge(a,b) 후 sim(ab,k) = (|a|·sim(a,k) + |b|·sim(b,k)) / (|a|+|b|).
+// 멤버 쌍을 매번 재합산하던 이전 구현과 결과가 동일하고, 대형 회의에서 수십 배 빠르다.
+function clusterCore(
+  embeddings: Float32Array[], threshold: number, numSpeakers?: number, durations?: number[],
+): number[] {
   const n = embeddings.length
   if (n === 0) return []
-  // 쌍별 유사도 사전 계산
-  const sim: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(0))
+  const unit = embeddings.map(toUnit)
+  const sim = new Float32Array(n * n)
   for (let i = 0; i < n; i++)
-    for (let j = i + 1; j < n; j++)
-      sim[i][j] = sim[j][i] = cosineSim(embeddings[i], embeddings[j])
+    for (let j = i + 1; j < n; j++) {
+      let dot = 0
+      for (let k = 0; k < unit[i].length; k++) dot += unit[i][k] * unit[j][k]
+      sim[i * n + j] = sim[j * n + i] = dot
+    }
 
-  let clusters: number[][] = Array.from({ length: n }, (_, i) => [i])
-  const avgSim = (a: number[], b: number[]) => {
-    let s = 0
-    for (const i of a) for (const j of b) s += sim[i][j]
-    return s / (a.length * b.length)
-  }
+  const alive = new Array<boolean>(n).fill(true)
+  const size = new Array<number>(n).fill(1)
+  const members: number[][] = Array.from({ length: n }, (_, i) => [i])
+  let aliveCount = n
+  const target = numSpeakers && numSpeakers >= 1 ? Math.floor(numSpeakers) : null
 
-  for (;;) {
+  while (aliveCount > 1 && (!target || aliveCount > target)) {
     let best = -Infinity, bi = -1, bj = -1
-    for (let i = 0; i < clusters.length; i++)
-      for (let j = i + 1; j < clusters.length; j++) {
-        const s = avgSim(clusters[i], clusters[j])
+    for (let i = 0; i < n; i++) {
+      if (!alive[i]) continue
+      for (let j = i + 1; j < n; j++) {
+        if (!alive[j]) continue
+        const s = sim[i * n + j]
         if (s > best) { best = s; bi = i; bj = j }
       }
-    if (bi < 0 || best < threshold) break
-    clusters[bi] = clusters[bi].concat(clusters[bj])
-    clusters.splice(bj, 1)
-    if (clusters.length === 1) break
+    }
+    if (bi < 0) break
+    if (!target && best < threshold) break
+    for (let k = 0; k < n; k++) {
+      if (!alive[k] || k === bi || k === bj) continue
+      const s = (size[bi] * sim[bi * n + k] + size[bj] * sim[bj * n + k]) / (size[bi] + size[bj])
+      sim[bi * n + k] = sim[k * n + bi] = s
+    }
+    size[bi] += size[bj]
+    members[bi].push(...members[bj])
+    members[bj] = []
+    alive[bj] = false
+    aliveCount--
+  }
+
+  let clusters = members.filter((m, i) => alive[i] && m.length > 0)
+
+  // 작은 클러스터 흡수 — durations가 있고 화자 수 강제가 아닐 때만.
+  if (!target && durations) {
+    const total = (m: number[]) => m.reduce((s, i) => s + durations[i], 0)
+    const large = clusters.filter(m => total(m) >= SMALL_CLUSTER_SEC)
+    if (large.length > 0 && large.length < clusters.length) {
+      const centroids = new Map(large.map(m => [m, centroidOf(unit, m)]))
+      const kept: number[][] = [...large]
+      for (const m of clusters) {
+        if (large.includes(m)) continue
+        const c = centroidOf(unit, m)
+        let bestSim = -Infinity, bestCluster: number[] | null = null
+        for (const l of large) {
+          const s = cosineSim(c, centroids.get(l)!)
+          if (s > bestSim) { bestSim = s; bestCluster = l }
+        }
+        if (bestCluster && bestSim >= ABSORB_MIN_SIM) bestCluster.push(...m)
+        else kept.push(m) // 큰 클러스터와 닮지 않은 소수 화자는 유지
+      }
+      clusters = kept
+    }
   }
 
   const out = new Array<number>(n).fill(0)
-  clusters.forEach((members, c) => members.forEach(m => { out[m] = c }))
+  clusters.forEach((m, c) => m.forEach(i => { out[i] = c }))
+  return out
+}
+
+/**
+ * 화자 임베딩 응집 클러스터링(평균 연결·코사인 유사도).
+ * - numSpeakers 지정 시 그 수까지 강제 병합(임계 무시).
+ * - durations 지정 시 총 발화 SMALL_CLUSTER_SEC 미만 클러스터를 큰 클러스터로 흡수해
+ *   잡음·맞장구가 화자로 승격되는 과분할을 막는다.
+ * - 구간이 maxRegions를 넘으면 긴 구간만 클러스터링하고 나머지는 센트로이드 최근접 배정.
+ */
+export function clusterEmbeddings(embeddings: Float32Array[], opts: ClusterOpts = {}): number[] {
+  const { threshold = DEFAULT_THRESHOLD, numSpeakers, durations, maxRegions = MAX_CLUSTER_REGIONS } = opts
+  const n = embeddings.length
+  if (n === 0) return []
+  if (!durations || n <= maxRegions) return clusterCore(embeddings, threshold, numSpeakers, durations)
+
+  // 대형 회의: 발화가 긴(임베딩이 신뢰할 만한) 상위 maxRegions만 병합하고 나머지는 배정만.
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => durations[b] - durations[a])
+  const top = order.slice(0, maxRegions)
+  const rest = order.slice(maxRegions)
+  const subIdx = clusterCore(top.map(i => embeddings[i]), threshold, numSpeakers, top.map(i => durations[i]))
+
+  const out = new Array<number>(n).fill(0)
+  top.forEach((orig, i) => { out[orig] = subIdx[i] })
+  const clusterCount = Math.max(...subIdx) + 1
+  const unitAll = embeddings.map(toUnit)
+  const centroids: Float32Array[] = []
+  for (let c = 0; c < clusterCount; c++)
+    centroids.push(centroidOf(unitAll, top.filter((_, i) => subIdx[i] === c)))
+  // 어느 센트로이드와도 닮지 않은(ABSORB_MIN_SIM 미만) 구간은 강제 편입하지 않고 모아뒀다가
+  // 자기들끼리 클러스터링해 새 화자로 남긴다 — 짧게만 말한 화자가 지워지는 것을 막는다.
+  const leftovers: number[] = []
+  for (const orig of rest) {
+    let bestSim = -Infinity, bestC = 0
+    for (let c = 0; c < clusterCount; c++) {
+      const s = cosineSim(unitAll[orig], centroids[c])
+      if (s > bestSim) { bestSim = s; bestC = c }
+    }
+    if (bestSim >= ABSORB_MIN_SIM) out[orig] = bestC
+    else leftovers.push(orig)
+  }
+  if (leftovers.length > 0) {
+    const leftIdx = clusterCore(leftovers.map(i => embeddings[i]), threshold, undefined, leftovers.map(i => durations[i]))
+    leftovers.forEach((orig, i) => { out[orig] = clusterCount + leftIdx[i] })
+  }
   return out
 }
 

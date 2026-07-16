@@ -32,6 +32,15 @@ test('diarize는 워커에 오디오를 보내고 done regions를 resolve한다'
   expect(await p).toEqual(regions)
 })
 
+test('diarize는 numSpeakers를 워커 메시지에 실어 보낸다', async () => {
+  const engine = makeEngine()
+  const p = engine.diarize(new Float32Array(1), undefined, 3)
+  const w = FakeWorker.instances[0]
+  expect(w.posted[0]).toMatchObject({ type: 'diarize', numSpeakers: 3 })
+  w.emit({ status: 'done', regions: [] })
+  await p
+})
+
 test('progress·info 이벤트가 onProgress로 매핑된다', async () => {
   const engine = makeEngine()
   const seen: unknown[] = []
