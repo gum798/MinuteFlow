@@ -8,13 +8,17 @@ vi.mock('../core/recorder/session', () => ({
   subscribeRecording: () => () => {},
   getRecordingState: vi.fn(),
 }))
-const { mockJobsRef } = vi.hoisted(() => ({ mockJobsRef: { current: [] as Array<{ meetingId: string; kind: string; status: string }> } }))
+const { mockJobsRef, mockPipelineBusyRef } = vi.hoisted(() => ({
+  mockJobsRef: { current: [] as Array<{ meetingId: string; kind: string; status: string }> },
+  mockPipelineBusyRef: { current: false },
+}))
 vi.mock('../core/jobs', () => ({ subscribeJobs: () => () => {}, getJobs: () => mockJobsRef.current }))
+vi.mock('../core/pipeline', () => ({ subscribePipeline: () => () => {}, getPipelineBusy: () => mockPipelineBusyRef.current }))
 vi.mock('../core/reload', () => ({ reloadPage: vi.fn() }))
 import { reloadPage } from '../core/reload'
 
 const IDLE = { phase: 'idle', meetingId: null, elapsedSec: 0, interim: '', finals: [], error: null }
-beforeEach(() => { (getRecordingState as Mock).mockReturnValue(IDLE); (reloadPage as Mock).mockClear(); mockJobsRef.current = [] })
+beforeEach(() => { (getRecordingState as Mock).mockReturnValue(IDLE); (reloadPage as Mock).mockClear(); mockJobsRef.current = []; mockPipelineBusyRef.current = false })
 afterEach(() => { Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurable: true }) })
 
 // navigator.serviceWorker를 목으로 두고, controllerchange를 수동으로 발화할 수 있게 한다(hadController=제어 SW 존재).
@@ -98,6 +102,17 @@ test('녹음 중에는 새 버전이 준비돼도 새로고침하지 않고 칩�
   renderShell()
   act(() => sw.fire('controllerchange'))
   expect(reloadPage).not.toHaveBeenCalled() // 녹음 유실 방지 — 자동 새로고침 금지
+  expect(screen.getByText(/끝나면 자동 적용/)).toBeInTheDocument()
+})
+
+test('파이프라인이 대기 중이면(첫 잡 등록 전 틈) 새 버전이 준비돼도 새로고침하지 않는다', () => {
+  // 녹음 종료 직후: phase=idle, 잡 스토어는 아직 비어 있고 자동 정리는 enqueue만 된 상태.
+  // 이 틈에 새로고침하면 자동 정리가 통째로 사라진다 — pipeline busy 신호가 막아야 한다.
+  mockPipelineBusyRef.current = true
+  const sw = mockServiceWorker(true)
+  renderShell()
+  act(() => sw.fire('controllerchange'))
+  expect(reloadPage).not.toHaveBeenCalled()
   expect(screen.getByText(/끝나면 자동 적용/)).toBeInTheDocument()
 })
 

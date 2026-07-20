@@ -1,4 +1,4 @@
-import { enqueue, runPartPipeline, runFinalPipeline, runAutoPipeline, __resetPipelineForTests } from './pipeline'
+import { enqueue, runPartPipeline, runFinalPipeline, runAutoPipeline, getPipelineBusy, subscribePipeline, __resetPipelineForTests } from './pipeline'
 
 // meetingActions를 목으로 대체해 파이프라인의 순서·위임 로직만 검증한다.
 const retranscribeMock = vi.fn(async (_id: string) => 'done')
@@ -48,6 +48,45 @@ describe('enqueue — 순차 큐', () => {
 
   test('반환 promise는 해당 fn의 완료(거부 포함)를 나타낸다', async () => {
     await expect(enqueue(async () => { throw new Error('x') })).rejects.toThrow('x')
+  })
+
+  // 자동 새로고침 가드용 busy 신호 — 첫 잡이 등록되기 전 비동기 틈에도 파이프라인이
+  // 진행 중임을 알 수 있어야, 녹음 종료 직후의 자동 정리가 새로고침에 죽지 않는다.
+  test('enqueue 호출 즉시(동기) busy가 되고, 완료되면 풀린다', async () => {
+    expect(getPipelineBusy()).toBe(false)
+    let release: (() => void) | undefined
+    const p = enqueue(() => new Promise<void>(r => { release = r }))
+    expect(getPipelineBusy()).toBe(true) // await 없이 동기적으로 true
+    await tick() // fn이 큐에서 시작될 때까지 (release 할당 대기)
+    release!()
+    await p
+    expect(getPipelineBusy()).toBe(false)
+  })
+
+  test('겹친 enqueue는 모두 끝나야 busy가 풀린다', async () => {
+    const p1 = enqueue(async () => { await tick() })
+    const p2 = enqueue(async () => { await tick() })
+    await p1
+    expect(getPipelineBusy()).toBe(true) // p2가 남아 있음
+    await p2
+    expect(getPipelineBusy()).toBe(false)
+  })
+
+  test('fn이 throw해도 busy는 풀린다', async () => {
+    const p = enqueue(async () => { throw new Error('boom') })
+    expect(getPipelineBusy()).toBe(true)
+    await p.catch(() => {})
+    expect(getPipelineBusy()).toBe(false)
+  })
+
+  test('busy 변화를 구독자에게 알린다', async () => {
+    const seen: boolean[] = []
+    const unsub = subscribePipeline(() => seen.push(getPipelineBusy()))
+    const p = enqueue(async () => {})
+    await p
+    unsub()
+    expect(seen[0]).toBe(true) // enqueue 시점
+    expect(seen.at(-1)).toBe(false) // 완료 시점
   })
 })
 

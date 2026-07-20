@@ -12,12 +12,33 @@ import type { SummaryTemplate } from './summarize/prompts'
 // 순차 실행 큐의 꼬리. enqueue마다 chain.then(fn)으로 이어 붙인다.
 let chain: Promise<void> = Promise.resolve()
 
+// 파이프라인 busy 신호 — enqueue 시점에 '동기적으로' 켜지고 해당 fn이 끝나면 꺼진다.
+// 잡 스토어(runJob)는 첫 잡이 등록되기까지 비동기 틈이 있어, 자동 새로고침 가드가 그 틈에
+// "한가하다"고 오판해 막 시작한 자동 정리를 페이지째 죽일 수 있다(녹음 종료 직후·잡 사이).
+// 이 카운터가 enqueue부터 완료까지 전 구간을 덮는다.
+let pendingCount = 0
+const pipelineListeners = new Set<() => void>()
+function notifyPipeline(): void { for (const l of pipelineListeners) l() }
+
+export function subscribePipeline(listener: () => void): () => void {
+  pipelineListeners.add(listener)
+  return () => pipelineListeners.delete(listener)
+}
+
+export function getPipelineBusy(): boolean {
+  return pendingCount > 0
+}
+
 /**
  * fn을 순차 큐에 넣고, 이번 fn의 완료를 나타내는 promise를 반환한다.
  * 앞선 작업이 실패해도 큐는 끊기지 않는다(다음 fn은 계속 실행) — chain은 항상 거부되지 않게 유지한다.
  */
 export function enqueue(fn: () => Promise<void>): Promise<void> {
-  const result = chain.then(fn)
+  pendingCount++
+  notifyPipeline()
+  // busy 해제(finally)를 반환 promise 체인 안에 두어, 호출자가 완료를 관측하는 시점엔
+  // busy도 이미 풀려 있게 한다(별도 체인이면 한 마이크로태스크 늦어 가드가 어긋난다).
+  const result = chain.then(() => Promise.resolve().then(fn).finally(() => { pendingCount--; notifyPipeline() }))
   chain = result.catch(() => {}) // 체인은 절대 거부하지 않게 하여 이후 작업이 계속 실행되도록
   return result
 }
@@ -102,4 +123,6 @@ export async function runAutoPipeline(meetingId: string): Promise<void> {
 /** 테스트 간 큐 상태 누수를 막는다. */
 export function __resetPipelineForTests(): void {
   chain = Promise.resolve()
+  pendingCount = 0
+  pipelineListeners.clear()
 }

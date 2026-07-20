@@ -3,6 +3,7 @@ import { NavLink, Link, Outlet } from 'react-router-dom'
 import { UndoToastProvider } from './UndoToast'
 import { subscribeRecording, getRecordingState } from '../core/recorder/session'
 import { subscribeJobs, getJobs, JOB_LABELS } from '../core/jobs'
+import { subscribePipeline, getPipelineBusy } from '../core/pipeline'
 import { formatTimestamp } from '../core/format'
 import { reloadPage } from '../core/reload'
 
@@ -31,7 +32,10 @@ const NAV = [
 export default function AppShell() {
   const { phase, elapsedSec } = useSyncExternalStore(subscribeRecording, getRecordingState)
   const jobs = useSyncExternalStore(subscribeJobs, getJobs)
-  const busy = jobs.length > 0 // 재전사·화자 구분·요약 등 진행 중인 작업이 하나라도 있으면 true
+  const pipelineBusy = useSyncExternalStore(subscribePipeline, getPipelineBusy)
+  // 진행 중 작업이 하나라도 있으면 true. pipelineBusy는 enqueue 직후 첫 잡이 등록되기 전과
+  // 잡 사이의 비동기 틈까지 덮는다 — 이 틈에 새로고침하면 자동 정리가 통째로 사라진다.
+  const busy = jobs.length > 0 || pipelineBusy
   const updateReady = useUpdateReady()
   const reloadedRef = useRef(false)
   // 새 버전이 준비되면(새 SW가 제어권 확보) 자동으로 새로고침해 최신 코드를 적용한다.
