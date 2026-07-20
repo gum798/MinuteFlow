@@ -27,6 +27,26 @@ test('단일 임베딩', () => {
   expect(clusterEmbeddings([A])).toEqual([0])
 })
 
+test('기본 임계(pyannote)에서 유사도 ~0.6의 단독 쌍은 병합되지 않는다', () => {
+  // 코사인 0.6 — 다른 화자끼리도 나올 수 있는 영역. pyannote 기본 임계(센트로이드 거리
+  // 0.7046 ≈ 코사인 0.75 등가)에선 단독 쌍을 병합하지 않아야 한다(과병합 방지).
+  const P = new Float32Array([1, 0, 0])
+  const Q = new Float32Array([0.6, 0.8, 0])
+  expect(new Set(clusterEmbeddings([P, Q])).size).toBe(2)
+})
+
+test('직접 병합엔 먼 두 조각도 중간 조각을 다리 삼아 센트로이드 연쇄로 합쳐진다', () => {
+  // 같은 화자의 세 조각 Am(+노이즈), Bm(중심), Cm(−노이즈).
+  // Am–Cm 단독으론 코사인 0.6(거리 0.894 ≥ 임계)이라 안 합쳐지지만,
+  // Am–Bm이 먼저 뭉치면 센트로이드가 중심으로 이동해 Cm과의 거리(0.673)가 임계 아래로
+  // 내려와 하나로 합쳐진다 — 평균 연결에는 없는 센트로이드 연결의 연쇄(비단조) 병합.
+  const Am = new Float32Array([1, 0.5, 0])
+  const Bm = new Float32Array([1, 0, 0])
+  const Cm = new Float32Array([1, -0.5, 0])
+  expect(new Set(clusterEmbeddings([Am, Cm])).size).toBe(2) // 직접은 병합 안 됨
+  expect(new Set(clusterEmbeddings([Am, Bm, Cm])).size).toBe(1) // 다리를 통해 연쇄 병합
+})
+
 test('numSpeakers를 주면 임계와 무관하게 그 수까지 병합한다', () => {
   // 서로 직교(유사도 0)인 4방향도 3개로 강제 병합된다.
   const dirs = [

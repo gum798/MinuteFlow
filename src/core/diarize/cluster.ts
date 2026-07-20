@@ -10,20 +10,22 @@ export function cosineSim(a: Float32Array | number[], b: Float32Array | number[]
 }
 
 export interface ClusterOpts {
-  /** 평균 연결 병합을 멈추는 코사인 유사도 하한. numSpeakers가 있으면 무시된다. */
+  /** 병합을 멈추는 코사인 유사도 하한(테스트·튜닝용). 없으면 pyannote 기본 거리 임계를 쓴다.
+   *  numSpeakers가 있으면 무시된다. */
   threshold?: number
   /** 사용자가 아는 화자 수 — 임계와 무관하게 이 수까지 병합한다(pyannote의 num_speakers와 동일). */
   numSpeakers?: number
   /** 각 임베딩 구간의 발화 길이(초). 작은 클러스터 흡수·대형 회의 상한에 쓰인다. */
   durations?: number[]
-  /** O(n²) 유사도 행렬 메모리 상한 — 초과 시 긴 구간만 클러스터링하고 나머지는 센트로이드 배정. */
+  /** O(n²) 거리 행렬 메모리 상한 — 초과 시 긴 구간만 클러스터링하고 나머지는 센트로이드 배정. */
   maxRegions?: number
 }
 
-// 짧은 구간(1~3초) 임베딩 + uint8 양자화 모델에선 같은 화자 쌍 유사도가 0.5~0.75로 내려앉고
-// 다른 화자는 0~0.4에 머문다(검증 발화 기준 0.9/0.5와 다름). 0.55는 그 사이 골짜기 값.
-// 과분할이 여전하면 내리고, 서로 다른 화자가 합쳐지면 올리는 튜닝 지점.
-const DEFAULT_THRESHOLD = 0.55
+// pyannote/speaker-diarization-3.1 config.yaml의 clustering.threshold — 정규화 임베딩의
+// 클러스터 센트로이드 간 유클리드 거리 임계(단위벡터에서 코사인 ~0.75 등가). 같은 임베딩 모델
+// (wespeaker-resnet34-LM)에 검증된 값이라 그대로 쓴다. 과분할이 여전하면 올리고, 서로 다른
+// 화자가 합쳐지면 내리는 튜닝 지점.
+const PYANNOTE_CENTROID_DIST = 0.7045654963945799
 // pyannote min_cluster_size 이식: 총 발화가 이보다 짧은 클러스터는 잡음·맞장구로 보고
 // 가장 비슷한 큰 클러스터로 흡수한다. 단 유사도가 ABSORB_MIN_SIM 미만이면 짧아도 뚜렷한
 // 화자로 보고 유지한다(3화자를 2화자로 뭉개는 것이 라벨 몇 개 남는 것보다 나쁨).
@@ -49,21 +51,31 @@ function centroidOf(unit: Float32Array[], members: number[]): Float32Array {
   return c
 }
 
-// 평균 연결 병합 본체. 쌍별 평균 유사도는 크기 가중 평균으로 정확히 증분 갱신된다
-// (Lance-Williams): merge(a,b) 후 sim(ab,k) = (|a|·sim(a,k) + |b|·sim(b,k)) / (|a|+|b|).
-// 멤버 쌍을 매번 재합산하던 이전 구현과 결과가 동일하고, 대형 회의에서 수십 배 빠르다.
+// 센트로이드 연결(centroid-linkage) 병합 본체 — pyannote 3.1과 동일한 방식.
+// 정규화 임베딩의 클러스터 평균(센트로이드) 간 유클리드 거리가 임계 미만인 동안 병합한다.
+// 평균 연결(쌍별 평균)과 달리 클러스터가 커질수록 센트로이드에서 구간별 잡음이 상쇄되어,
+// 짧은 구간·양자화 임베딩의 낮은 쌍별 유사도에서도 같은 화자 조각들이 연쇄적으로 합쳐진다.
+// simThreshold(코사인)가 주어지면 단위벡터 등가 거리 d=√(2(1−cos))로 변환해 쓴다.
 function clusterCore(
-  embeddings: Float32Array[], threshold: number, numSpeakers?: number, durations?: number[],
+  embeddings: Float32Array[], simThreshold: number | undefined, numSpeakers?: number, durations?: number[],
 ): number[] {
   const n = embeddings.length
   if (n === 0) return []
+  const distThreshold = simThreshold === undefined
+    ? PYANNOTE_CENTROID_DIST
+    : Math.sqrt(Math.max(0, 2 * (1 - simThreshold)))
   const unit = embeddings.map(toUnit)
-  const sim = new Float32Array(n * n)
+  const dim = unit[0].length
+  // 클러스터 합 벡터(센트로이드 = sums/size). 누적 오차를 줄이려 배정밀도로 유지한다.
+  const sums = unit.map(u => Float64Array.from(u))
+  const dist = new Float32Array(n * n)
   for (let i = 0; i < n; i++)
     for (let j = i + 1; j < n; j++) {
       let dot = 0
-      for (let k = 0; k < unit[i].length; k++) dot += unit[i][k] * unit[j][k]
-      sim[i * n + j] = sim[j * n + i] = dot
+      for (let k = 0; k < dim; k++) dot += unit[i][k] * unit[j][k]
+      // 단위벡터의 유클리드 거리: d² = 2 − 2·cos
+      const d = Math.sqrt(Math.max(0, 2 - 2 * dot))
+      dist[i * n + j] = dist[j * n + i] = d
     }
 
   const alive = new Array<boolean>(n).fill(true)
@@ -73,27 +85,34 @@ function clusterCore(
   const target = numSpeakers && numSpeakers >= 1 ? Math.floor(numSpeakers) : null
 
   while (aliveCount > 1 && (!target || aliveCount > target)) {
-    let best = -Infinity, bi = -1, bj = -1
+    let best = Infinity, bi = -1, bj = -1
     for (let i = 0; i < n; i++) {
       if (!alive[i]) continue
       for (let j = i + 1; j < n; j++) {
         if (!alive[j]) continue
-        const s = sim[i * n + j]
-        if (s > best) { best = s; bi = i; bj = j }
+        const d = dist[i * n + j]
+        if (d < best) { best = d; bi = i; bj = j }
       }
     }
     if (bi < 0) break
-    if (!target && best < threshold) break
-    for (let k = 0; k < n; k++) {
-      if (!alive[k] || k === bi || k === bj) continue
-      const s = (size[bi] * sim[bi * n + k] + size[bj] * sim[bj * n + k]) / (size[bi] + size[bj])
-      sim[bi * n + k] = sim[k * n + bi] = s
-    }
+    if (!target && best >= distThreshold) break
+    for (let k = 0; k < dim; k++) sums[bi][k] += sums[bj][k]
     size[bi] += size[bj]
     members[bi].push(...members[bj])
     members[bj] = []
     alive[bj] = false
     aliveCount--
+    // 병합된 클러스터의 센트로이드가 바뀌었으니 다른 모든 클러스터와의 거리를 갱신한다.
+    for (let k = 0; k < n; k++) {
+      if (!alive[k] || k === bi) continue
+      let d2 = 0
+      for (let t = 0; t < dim; t++) {
+        const diff = sums[bi][t] / size[bi] - sums[k][t] / size[k]
+        d2 += diff * diff
+      }
+      const d = Math.sqrt(d2)
+      dist[bi * n + k] = dist[k * n + bi] = d
+    }
   }
 
   let clusters = members.filter((m, i) => alive[i] && m.length > 0)
@@ -126,14 +145,16 @@ function clusterCore(
 }
 
 /**
- * 화자 임베딩 응집 클러스터링(평균 연결·코사인 유사도).
+ * 화자 임베딩 응집 클러스터링(pyannote 3.1 방식 센트로이드 연결·유클리드 거리).
+ * 센트로이드 병합은 거리가 임계 아래로 내려오는 연쇄(비단조)를 일으켜, 쌍별로는 멀어 보이는
+ * 같은 화자 조각들도 클러스터가 커지며 합쳐진다.
  * - numSpeakers 지정 시 그 수까지 강제 병합(임계 무시).
  * - durations 지정 시 총 발화 SMALL_CLUSTER_SEC 미만 클러스터를 큰 클러스터로 흡수해
  *   잡음·맞장구가 화자로 승격되는 과분할을 막는다.
  * - 구간이 maxRegions를 넘으면 긴 구간만 클러스터링하고 나머지는 센트로이드 최근접 배정.
  */
 export function clusterEmbeddings(embeddings: Float32Array[], opts: ClusterOpts = {}): number[] {
-  const { threshold = DEFAULT_THRESHOLD, numSpeakers, durations, maxRegions = MAX_CLUSTER_REGIONS } = opts
+  const { threshold, numSpeakers, durations, maxRegions = MAX_CLUSTER_REGIONS } = opts
   const n = embeddings.length
   if (n === 0) return []
   if (!durations || n <= maxRegions) return clusterCore(embeddings, threshold, numSpeakers, durations)

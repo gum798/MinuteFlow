@@ -21,13 +21,13 @@ vi.mock('../../core/stt/whisperLocal', () => ({
     dispose() {}
   },
 }))
-const diarizeMock = vi.fn(async () => [{ start: 0, end: 5, speaker: 'SPK1' }])
+const diarizeMock = vi.fn(async (..._args: unknown[]) => [{ start: 0, end: 5, speaker: 'SPK1' }])
 // 그룹 화자 구분(diarizeGroup)은 engine.extract를 부마다 호출한다 — 매 호출 같은 화자(동일 임베딩)로
 // 응답해, 부 경계를 넘어 하나의 화자(SPK1)로 묶이는지 확인할 수 있게 한다.
 const extractMock = vi.fn(async () => ({ targets: [{ start: 0, end: 5 }], embeddings: [new Float32Array([1, 0])] }))
 vi.mock('../../core/diarize/diarizeLocal', () => ({
   DiarizeEngine: class {
-    diarize() { return diarizeMock() }
+    diarize(...args: unknown[]) { return diarizeMock(...args) }
     extract() { return extractMock() }
     dispose() {}
   },
@@ -150,6 +150,18 @@ test('화자 구분을 실행하면 배지가 보이고 세그먼트에 speaker�
   await waitFor(() => expect(screen.getByText('SPK1')).toBeInTheDocument())
   const segs = await db.transcriptSegments.where('meetingId').equals(m.id).toArray()
   expect(segs.some(s => s.speaker === 'SPK1')).toBe(true)
+})
+
+test('화자 수를 입력하고 화자 구분을 실행하면 그 수가 엔진까지 전달된다', async () => {
+  const m = await seed()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  diarizeMock.mockClear()
+  renderPage(m.id)
+  await waitFor(() => screen.getByRole('button', { name: /화자 구분/ }))
+  await userEvent.type(screen.getByRole('spinbutton', { name: '화자 수' }), '2')
+  await userEvent.click(screen.getByRole('button', { name: /화자 구분/ }))
+  await waitFor(() => expect(diarizeMock).toHaveBeenCalled())
+  expect(diarizeMock.mock.calls[0][2]).toBe(2)
 })
 
 test('배지를 클릭하고 팝업에 이름을 입력해 저장하면 표시 이름이 바뀐다', async () => {
