@@ -37,7 +37,8 @@ function groupRepresentatives(meetings: Meeting[]): { rep: Meeting; parts: Meeti
 }
 
 export default function Home() {
-  const [meetings, setMeetings] = useState<Meeting[]>([])
+  // null = 아직 로드 전(로딩 표시). 빈 배열과 구분해야 "아직 회의록이 없습니다"가 로드 전에 번쩍이지 않는다.
+  const [meetings, setMeetings] = useState<Meeting[] | null>(null)
   const [interrupted, setInterrupted] = useState<Meeting[]>([])
   const [usage, setUsage] = useState<{ usage: number; quota: number } | null>(null) // usage = 실측(회의+모델캐시), 설정 화면과 동일 기준
   const navigate = useNavigate()
@@ -48,17 +49,20 @@ export default function Home() {
   const refresh = useCallback(async () => {
     setMeetings(await listMeetings())
     setInterrupted(await findInterruptedMeetings())
-    const b = await getStorageBreakdown()
-    setUsage(b ? { usage: b.totalUsage, quota: b.quota } : null)
   }, [])
 
   useEffect(() => {
-    void ensurePersistentStorage()
-    // 탭이 만료 전에 닫혀 남은 soft-deleted 잔여를 정리(단, 실행취소 대기 중인 최신 삭제는 보존)
-    void purgeDeleted(UNDO_MS)
-    // 주인 잃은 오디오(회의 행만 삭제된 사고) 복구 후 목록 로드
-    void recoverOrphanAudio().then(n => { if (n > 0) void refresh() })
-    void refresh()
+    // 목록 먼저 — 아래 백그라운드 작업들은 모든 오디오 청크(GB급)를 읽어 메인 스레드를
+    // 수십 초 막을 수 있으므로, 반드시 목록이 화면에 뜬 뒤에 시작한다.
+    void refresh().then(() => {
+      void ensurePersistentStorage()
+      // 탭이 만료 전에 닫혀 남은 soft-deleted 잔여를 정리(단, 실행취소 대기 중인 최신 삭제는 보존)
+      void purgeDeleted(UNDO_MS)
+      // 주인 잃은 오디오(회의 행만 삭제된 사고) 복구 — 찾으면 목록을 다시 로드
+      void recoverOrphanAudio().then(n => { if (n > 0) void refresh() })
+      // 저장 공간 실측 — 목록과 독립적으로 준비되는 대로 하단 바에 채워진다.
+      void getStorageBreakdown().then(b => setUsage(b ? { usage: b.totalUsage, quota: b.quota } : null))
+    })
     // 다른 화면(회의 상세)에서 실행취소로 복구되면 목록을 다시 로드
     const onRefresh = () => { void refresh() }
     window.addEventListener('minuteflow:refresh', onRefresh)
@@ -94,7 +98,7 @@ export default function Home() {
   }
 
   // 분할 회의는 그룹당 대표(완료된 마지막 부) 1개만 카드로 노출한다.
-  const done = groupRepresentatives(meetings)
+  const done = groupRepresentatives(meetings ?? [])
 
   return (
     <div>
@@ -121,7 +125,9 @@ export default function Home() {
           <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} onClick={() => void remove(m.id)}>삭제</button>
         </div>
       ))}
-      {done.length === 0 ? (
+      {meetings === null ? (
+        <p className="sub">회의록을 불러오는 중…</p>
+      ) : done.length === 0 ? (
         <p className="sub">아직 회의록이 없습니다. 녹음을 시작해보세요.</p>
       ) : (
         <div className="card-grid">
