@@ -14,6 +14,9 @@ export interface Meeting {
   groupId?: string
   /** 분할 그룹 내 부(part) 번호. 1부터 시작. (optional·비인덱스) */
   partIndex?: number
+  /** 이 회의 오디오 청크들의 총 바이트 — 저장 시 누적 기록해 저장 공간 표시를 실측 없이 합산한다.
+   *  없으면(옛 데이터) getStorageBreakdown이 한 번 실측해 채운다. (optional·비인덱스) */
+  audioBytes?: number
 }
 
 export interface AudioChunk {

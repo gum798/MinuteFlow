@@ -53,7 +53,11 @@ export async function appendAudioChunk(
   meetingId: string, seq: number, blob: Blob, mimeType: string,
 ): Promise<void> {
   const data = await blob.arrayBuffer()
-  await db.audioChunks.add({ meetingId, seq, data, mimeType, startedAt: Date.now() })
+  // 청크 저장과 회의의 audioBytes 누적을 한 트랜잭션으로 — 저장 공간 표시가 실측 없이 이 합만 읽는다.
+  await db.transaction('rw', [db.audioChunks, db.meetings], async () => {
+    await db.audioChunks.add({ meetingId, seq, data, mimeType, startedAt: Date.now() })
+    await db.meetings.where('id').equals(meetingId).modify(m => { m.audioBytes = (m.audioBytes ?? 0) + data.byteLength })
+  })
 }
 
 export async function appendSegment(seg: Omit<TranscriptSegment, 'id'>): Promise<void> {
@@ -126,6 +130,7 @@ export async function recoverOrphanAudio(): Promise<number> {
       durationSec,
       status: 'done',
       language: 'ko-KR',
+      audioBytes: chunks.reduce((s, c) => s + c.data.byteLength, 0),
     })
     recovered++
   }
@@ -147,10 +152,11 @@ export async function finalizeInterrupted(id: string): Promise<Meeting | undefin
 export async function createUploadMeeting(
   title: string, durationSec: number, blob: Blob, mimeType: string, language = 'ko-KR',
 ): Promise<Meeting> {
+  const data = await blob.arrayBuffer()
   const meeting: Meeting = {
     id: crypto.randomUUID(), title, createdAt: Date.now(), durationSec, status: 'done', language,
+    audioBytes: data.byteLength,
   }
-  const data = await blob.arrayBuffer()
   await db.transaction('rw', [db.meetings, db.audioChunks], async () => {
     await db.meetings.add(meeting)
     await db.audioChunks.add({ meetingId: meeting.id, seq: 0, data, mimeType, startedAt: meeting.createdAt })
@@ -164,9 +170,10 @@ export async function createUploadMeeting(
  */
 export async function replaceAudio(meetingId: string, blob: Blob): Promise<void> {
   const data = await blob.arrayBuffer()
-  await db.transaction('rw', [db.audioChunks], async () => {
+  await db.transaction('rw', [db.audioChunks, db.meetings], async () => {
     await db.audioChunks.where('meetingId').equals(meetingId).delete()
     await db.audioChunks.add({ meetingId, seq: 0, data, mimeType: blob.type, startedAt: Date.now() })
+    await db.meetings.where('id').equals(meetingId).modify(m => { m.audioBytes = data.byteLength })
   })
 }
 

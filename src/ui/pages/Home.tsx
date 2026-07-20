@@ -54,14 +54,17 @@ export default function Home() {
   useEffect(() => {
     // 목록 먼저 — 아래 백그라운드 작업들은 모든 오디오 청크(GB급)를 읽어 메인 스레드를
     // 수십 초 막을 수 있으므로, 반드시 목록이 화면에 뜬 뒤에 시작한다.
+    const refreshUsage = () =>
+      getStorageBreakdown().then(b => setUsage(b ? { usage: b.totalUsage, quota: b.quota } : null))
     void refresh().then(() => {
       void ensurePersistentStorage()
       // 탭이 만료 전에 닫혀 남은 soft-deleted 잔여를 정리(단, 실행취소 대기 중인 최신 삭제는 보존)
       void purgeDeleted(UNDO_MS)
-      // 주인 잃은 오디오(회의 행만 삭제된 사고) 복구 — 찾으면 목록을 다시 로드
-      void recoverOrphanAudio().then(n => { if (n > 0) void refresh() })
-      // 저장 공간 실측 — 목록과 독립적으로 준비되는 대로 하단 바에 채워진다.
-      void getStorageBreakdown().then(b => setUsage(b ? { usage: b.totalUsage, quota: b.quota } : null))
+      // 주인 잃은 오디오(회의 행만 삭제된 사고) 복구 — 찾으면 목록과 사용량을 다시 로드
+      // (복구 전 사용량 집계는 고아 청크를 못 세므로, 복구 후 재조회해야 바가 맞는다)
+      void recoverOrphanAudio().then(n => { if (n > 0) { void refresh(); void refreshUsage() } })
+      // 저장 공간 집계 — 목록과 독립적으로 준비되는 대로 하단 바에 채워진다.
+      void refreshUsage()
     })
     // 다른 화면(회의 상세)에서 실행취소로 복구되면 목록을 다시 로드
     const onRefresh = () => { void refresh() }

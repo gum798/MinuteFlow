@@ -38,11 +38,29 @@ export async function getModelCacheBytes(): Promise<number> {
   return total
 }
 
+// 회의별 audioBytes 메타데이터 합 — 오디오 원본(GB급)을 읽지 않는다.
+// soft-delete된 회의도 purge 전까지 청크가 디스크에 남으므로 포함한다.
+// audioBytes가 없는 옛 회의는 그 회의 청크만 한 번 실측해 메타데이터에 채운다(자가 치유 —
+// 다음 호출부터는 실측 없음). 실측·기록 사이에 녹음이 끼면 근사가 될 수 있으나 표시용으론 충분.
+async function getMeetingBytes(): Promise<number> {
+  const meetings = await db.meetings.toArray()
+  let total = 0
+  for (const m of meetings) {
+    if (m.audioBytes !== undefined) { total += m.audioBytes; continue }
+    let bytes = 0
+    await db.audioChunks.where('meetingId').equals(m.id).each(c => { bytes += c.data.byteLength })
+    // 실측 중 녹음이 끼어 appendAudioChunk가 먼저 값을 만들었으면 그쪽(누적치)을 보존한다
+    // — 덮어쓰면 그 사이 청크만큼 영구 과소집계된다.
+    await db.meetings.where('id').equals(m.id).modify(mm => { if (mm.audioBytes === undefined) mm.audioBytes = bytes })
+    total += bytes
+  }
+  return total
+}
+
 export async function getStorageBreakdown(): Promise<StorageBreakdown | null> {
   const storage = navigator.storage
   const quota = storage?.estimate ? ((await storage.estimate()).quota ?? 0) : 0
-  let meetingBytes = 0
-  await db.audioChunks.each(c => { meetingBytes += c.data.byteLength })
+  const meetingBytes = await getMeetingBytes()
   const cacheBytes = await getModelCacheBytes()
   return { totalUsage: meetingBytes + cacheBytes, quota, meetingBytes, cacheBytes }
 }
