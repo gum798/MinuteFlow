@@ -1,6 +1,6 @@
 import { AutoProcessor, AutoModelForAudioFrameClassification, AutoModel } from '@huggingface/transformers'
 import { buildEmbeddingLoadPlan } from '../stt/loadPlan'
-import { sliceWindows, offsetRegions, filterEmbeddable, type RawRegion } from './windows'
+import { sliceWindows, offsetRegions, filterEmbeddable, clampRegions, type RawRegion } from './windows'
 import { clusterEmbeddings, labelClusters } from './cluster'
 import type { SpeakerRegion } from './assign'
 
@@ -62,7 +62,8 @@ async function extractRegionsAndEmbeddings(audio: Float32Array, progress: (x: Pr
     regions.push(...offsetRegions(local.filter(r => r.id !== 0), offsetSec))
     if (i % 5 === 4) self.postMessage({ status: 'info', message: `발화 구간 분석 중… (${i + 1}/${windows.length})` })
   }
-  const targets = filterEmbeddable(regions)
+  // 마지막 창의 0 패딩 구간에 걸친 구간을 실제 길이로 잘라낸다(임베딩 파형 슬라이스가 빈 배열이 되지 않게).
+  const targets = filterEmbeddable(clampRegions(regions, audio.length / SAMPLE_RATE))
   const embeddings: Float32Array[] = []
   for (let i = 0; i < targets.length; i++) {
     const r = targets[i]
