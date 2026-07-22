@@ -252,6 +252,32 @@ test('삭제 후 실행취소를 누르면 홈 목록에 복귀한다', async ()
   expect((await listMeetings()).map(x => x.id)).toContain(m.id)
 })
 
+test('오디오만 삭제를 누르면 오디오 버튼들이 즉시 사라지고 실행취소 토스트가 뜬다 — 청크는 만료 전까지 유지', async () => {
+  const m = await seed()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  renderApp(m.id)
+  await waitFor(() => screen.getByRole('button', { name: '오디오만 삭제' }))
+  await userEvent.click(screen.getByRole('button', { name: '오디오만 삭제' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: '실행취소' })).toBeInTheDocument())
+  // 오디오 관련 버튼은 즉시 사라진다.
+  expect(screen.queryByRole('button', { name: '오디오 다운로드' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '오디오만 삭제' })).not.toBeInTheDocument()
+  // 실제 삭제는 토스트 만료 시점 — 청크는 아직 남아 실행취소가 공짜다.
+  expect(await db.audioChunks.where('meetingId').equals(m.id).count()).toBe(1)
+})
+
+test('오디오만 삭제 후 실행취소하면 오디오 버튼이 복귀하고 청크는 무손상이다', async () => {
+  const m = await seed()
+  await appendAudioChunk(m.id, 0, new Blob(['aud']), 'audio/webm')
+  renderApp(m.id)
+  await waitFor(() => screen.getByRole('button', { name: '오디오만 삭제' }))
+  await userEvent.click(screen.getByRole('button', { name: '오디오만 삭제' }))
+  await waitFor(() => screen.getByRole('button', { name: '실행취소' }))
+  await userEvent.click(screen.getByRole('button', { name: '실행취소' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: '오디오 다운로드' })).toBeInTheDocument())
+  expect(await db.audioChunks.where('meetingId').equals(m.id).count()).toBe(1)
+})
+
 test('키가 없으면 [AI 프롬프트 복사]가 보이고, 클릭 시 프롬프트를 복사하고 토스트를 띄운다', async () => {
   const m = await seed()
   const writeText = vi.fn(async (_text: string) => {})

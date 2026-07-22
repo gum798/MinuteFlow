@@ -4,7 +4,7 @@ import {
   updateMeetingTitle, listMeetings, getMeeting, getMeetingGroup, getSegments,
   getMeetingAudio, findInterruptedMeetings, finalizeInterrupted, deleteMeeting, recoverOrphanAudio,
   createUploadMeeting, replaceAudio, replaceSegments, applySpeakers, updateSpeakerNames,
-  softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting,
+  softDeleteMeeting, restoreMeeting, purgeDeleted, purgeMeeting, deleteMeetingAudio,
   softDeleteGroup, restoreGroup, purgeGroup,
   saveSummary, getSummaries,
 } from './meetings'
@@ -377,5 +377,35 @@ describe('audioBytes 메타데이터 (저장 공간 실측 없는 합산용)', (
     await db.audioChunks.add({ meetingId: 'orphan-1', seq: 1, data: new Uint8Array(20).buffer, mimeType: 'audio/webm', startedAt: Date.now() })
     expect(await recoverOrphanAudio()).toBe(1)
     expect((await getMeeting('orphan-1'))?.audioBytes).toBe(50)
+  })
+})
+
+describe('deleteMeetingAudio — 오디오만 삭제', () => {
+  test('청크만 지우고 전사·요약·회의 행은 유지하며 audioBytes를 0으로 갱신한다', async () => {
+    const m = await createMeeting()
+    await appendAudioChunk(m.id, 0, new Blob([new Uint8Array(100)]), 'audio/webm')
+    await appendSegment({ meetingId: m.id, startSec: 0, endSec: 1, text: '발언', source: 'whisper', isFinal: true })
+    await saveSummary(m.id, 'minutes', '## 요약', 'gemini')
+
+    await deleteMeetingAudio([m.id])
+
+    expect(await getMeetingAudio(m.id)).toBeNull()
+    expect((await getMeeting(m.id))?.audioBytes).toBe(0)
+    expect(await getSegments(m.id)).toHaveLength(1)
+    expect(await getSummaries(m.id)).toHaveLength(1)
+  })
+
+  test('여러 부(그룹)의 오디오를 한 번에 지운다', async () => {
+    const m1 = await createMeeting()
+    const m2 = await createMeeting()
+    await appendAudioChunk(m1.id, 0, new Blob([new Uint8Array(10)]), 'audio/webm')
+    await appendAudioChunk(m2.id, 0, new Blob([new Uint8Array(20)]), 'audio/webm')
+
+    await deleteMeetingAudio([m1.id, m2.id])
+
+    expect(await getMeetingAudio(m1.id)).toBeNull()
+    expect(await getMeetingAudio(m2.id)).toBeNull()
+    expect((await getMeeting(m1.id))?.audioBytes).toBe(0)
+    expect((await getMeeting(m2.id))?.audioBytes).toBe(0)
   })
 })

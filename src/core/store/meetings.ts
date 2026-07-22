@@ -198,6 +198,19 @@ export async function updateSpeakerNames(meetingId: string, names: Record<string
   await db.meetings.update(meetingId, { speakerNames: names })
 }
 
+/**
+ * 오디오만 삭제한다 — 전사·화자·요약·회의 행은 유지. 저장 공간 회수용(그룹이면 전 부 id를 넘긴다).
+ * audioBytes를 0으로 갱신해 저장 공간 표시가 실측 없이 즉시 반영되게 한다.
+ */
+export async function deleteMeetingAudio(ids: string[]): Promise<void> {
+  await db.transaction('rw', [db.audioChunks, db.meetings], async () => {
+    for (const id of ids) {
+      await db.audioChunks.where('meetingId').equals(id).delete()
+      await db.meetings.where('id').equals(id).modify(m => { m.audioBytes = 0 })
+    }
+  })
+}
+
 export async function deleteMeeting(id: string): Promise<void> {
   await db.transaction('rw', [db.meetings, db.audioChunks, db.transcriptSegments, db.summaries], async () => {
     await db.audioChunks.where('meetingId').equals(id).delete()

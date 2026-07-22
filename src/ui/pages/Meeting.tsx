@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { Meeting, TranscriptSegment, Summary } from '../../core/types'
-import { getMeeting, getMeetingGroup, getSegments, getMeetingAudio, updateMeetingTitle, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, getSummaries, replaceSegments } from '../../core/store/meetings'
+import { getMeeting, getMeetingGroup, getSegments, getMeetingAudio, updateMeetingTitle, updateSpeakerNames, softDeleteMeeting, restoreMeeting, purgeMeeting, deleteMeetingAudio, getSummaries, replaceSegments } from '../../core/store/meetings'
 import { subscribeJobs, getJobs, type JobDoneDetail } from '../../core/jobs'
 import { useUndoToast } from '../UndoToast'
 import { Markdown } from '../Markdown'
@@ -287,6 +287,19 @@ export default function MeetingPage() {
     setTimeout(() => setCorrectToast(false), 2000)
   }
 
+  // 오디오만 삭제 — 전사·화자·요약은 유지. 화면에선 즉시 숨기고, 실제 삭제는 토스트 만료 시점에
+  // 실행해 실행취소를 공짜로 만든다(회의 삭제와 동일 패턴). 그룹이면 전 부의 오디오를 지운다.
+  function removeAudioOnly() {
+    if (!meeting) return
+    const ids = (group.length > 0 ? group : [meeting]).map(p => p.id)
+    setAudioAvailable(false)
+    showUndoToast({
+      message: '오디오를 삭제했어요 — 전사·화자·요약은 유지됩니다.',
+      onUndo: () => setAudioAvailable(true),
+      onExpire: () => { void deleteMeetingAudio(ids) },
+    })
+  }
+
   async function removeMeeting() {
     if (!meeting) return
     if (getRecordingState().meetingId === meeting.id) {
@@ -334,7 +347,12 @@ export default function MeetingPage() {
         {DOCX_ENABLED && (
           <button className="btn btn-outline btn-sm" onClick={() => void exportDocx()}>DOCX 내보내기</button>
         )}
-        <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
+        {audioAvailable && (
+          <>
+            <button className="btn btn-outline btn-sm" onClick={() => void downloadAudio()}>오디오 다운로드</button>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={job !== null || autoBusy} onClick={() => removeAudioOnly()}>오디오만 삭제</button>
+          </>
+        )}
         <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--warn-fg)' }} disabled={job !== null} onClick={() => void removeMeeting()}>삭제</button>
       </div>
       {(audioAvailable || hasMeaningfulTranscript(segments)) && (
